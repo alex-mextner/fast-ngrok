@@ -20,22 +20,18 @@ bun install
 
 ## Server Setup (VPS)
 
-1. Generate API key:
+1. Run interactive setup:
 ```bash
-bunx fast-ngrok init
+bun run src/cli/index.ts init
 ```
+This will ask for:
+- Your domain (e.g., `tunnel.example.com`)
+- Server port (default: 3100)
+- DNS provider for wildcard SSL (Cloudflare, DigitalOcean, Hetzner, etc.)
 
-2. Edit `.env` with your domain:
-```env
-API_KEY=<generated>
-BASE_DOMAIN=tunnel.example.com
-TUNNEL_PORT=3100
-CADDY_ADMIN_URL=http://localhost:2019
-```
+Generates `.env` and `deploy/Caddyfile`.
 
-3. Configure Caddy with wildcard SSL (see `deploy/Caddyfile.example`)
-
-4. Start server:
+2. Start server:
 ```bash
 bun run server
 ```

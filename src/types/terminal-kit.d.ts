@@ -54,6 +54,23 @@ declare module "terminal-kit" {
     on(event: "key", callback: (key: string, matches: string[], data: unknown) => void): void;
     on(event: "resize", callback: (width: number, height: number) => void): void;
     on(event: string, callback: (...args: unknown[]) => void): void;
+
+    // Interactive input
+    inputField(
+      options: { default?: string },
+      callback: (error: Error | undefined, input: string | undefined) => void
+    ): void;
+
+    singleColumnMenu(
+      items: string[],
+      options: { selectedIndex?: number },
+      callback: (error: Error | undefined, response: { selectedIndex: number }) => void
+    ): void;
+
+    yesOrNo(
+      options: { yes?: string[]; no?: string[] },
+      callback: (error: Error | undefined, result: boolean) => void
+    ): void;
   }
 
   export const terminal: Terminal;

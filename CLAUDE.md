@@ -10,16 +10,12 @@ Single-user ngrok alternative with WebSocket tunneling and Caddy integration.
 # 1. Install
 bun install
 
-# 2. Generate API key
+# 2. Run interactive setup
 bun run src/cli/index.ts init
-# → Creates .env with API_KEY
+# → Asks for domain, port, DNS provider
+# → Generates .env and deploy/Caddyfile
 
-# 3. Edit .env
-BASE_DOMAIN=tunnel.example.com   # Your wildcard domain
-
-# 4. Configure Caddy (see Caddy Setup section)
-
-# 5. Start server
+# 3. Start server
 bun run server
 # or with hot reload:
 bun run dev
