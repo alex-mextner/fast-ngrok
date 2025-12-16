@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun run:*)",
+      "Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
+      "Bash(bun:*)",
+      "Bash(timeout 2 bun run:*)"
+    ]
+  }
+}
