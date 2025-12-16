@@ -7,7 +7,9 @@
       "Bash(timeout 2 bun run:*)",
       "Bash(npm version:*)",
       "Bash(npm publish)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

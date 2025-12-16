@@ -403,6 +403,8 @@ async function setupCaddy(config: InitConfig): Promise<void> {
 
   if (hasPlugin) {
     term.green(`  ✓ Caddy already has ${config.dnsProvider} plugin\n`);
+    // Still update systemd service in case it changed
+    await setupCaddySystemd();
   } else {
     term.yellow(`  Caddy missing ${config.dnsProvider} plugin, rebuilding...\n`);
     await installCaddyWithPlugin(config.dnsProvider);
