@@ -3,15 +3,15 @@
 import { parseArgs } from "util";
 import { httpCommand } from "./commands/http.ts";
 import { authCommand } from "./commands/auth.ts";
-import { initCommand } from "./commands/init.ts";
+import { initServerCommand } from "./commands/init-server.ts";
 
 const HELP = `
 fast-ngrok - Simple tunnel to localhost
 
 Commands:
-  http <port>  Expose local HTTP server
-  auth         Configure server URL and API key
-  init         Generate API key (run on server)
+  http <port>   Expose local HTTP server
+  auth          Configure server URL and API key
+  init-server   Install and configure server (run on VPS)
 
 Options (for http command):
   --no-local-shortcut  Disable local shortcut (macOS only)
@@ -19,22 +19,18 @@ Options (for http command):
 
 Usage:
   bunx fast-ngrok http 3000
-  bunx fast-ngrok http 3000 --no-local-shortcut
   bunx fast-ngrok auth
-  bunx fast-ngrok init
+  bunx fast-ngrok init-server   # Run on server with sudo
 
 Examples:
   # Start tunnel to local dev server
   bunx fast-ngrok http 3000
 
-  # Start tunnel without local shortcut
-  bunx fast-ngrok http 3000 --no-local-shortcut
-
   # Configure client with server credentials
   bunx fast-ngrok auth
 
-  # Generate API key on server
-  bunx fast-ngrok init
+  # Setup server (run on VPS as root)
+  sudo bunx fast-ngrok init-server
 `;
 
 async function main() {
@@ -72,8 +68,8 @@ async function main() {
       await authCommand();
       break;
 
-    case "init":
-      await initCommand();
+    case "init-server":
+      await initServerCommand();
       break;
 
     default:
