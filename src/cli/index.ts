@@ -9,33 +9,23 @@ const HELP = `
 fast-ngrok - Simple tunnel to localhost
 
 Commands:
-  http <port>   Expose local HTTP server (client)
-  auth          Configure server URL and API key (client)
-  server        Run tunnel server (VPS)
-  init-server   Install and configure server (VPS, run with sudo)
+  init-server   Setup server (VPS, requires sudo)
+  server        Run tunnel server daemon (VPS)
+  auth          Configure credentials (client)
+  http <port>   Start tunnel to local server (client)
 
-Options (for http command):
+Options:
   --no-local-shortcut  Disable local shortcut (macOS only)
-                       By default, local requests bypass tunnel
 
 Usage:
-  bunx fast-ngrok http 3000
-  bunx fast-ngrok auth
-  bunx fast-ngrok server
+  # 1. Setup server (on VPS)
   sudo bunx fast-ngrok init-server
 
-Examples:
-  # Start tunnel to local dev server
-  bunx fast-ngrok http 3000
-
-  # Configure client with server credentials
+  # 2. Configure client (on local machine)
   bunx fast-ngrok auth
 
-  # Run server on VPS
-  bunx fast-ngrok server
-
-  # Setup server (run on VPS as root)
-  sudo bunx fast-ngrok init-server
+  # 3. Start tunnel
+  bunx fast-ngrok http 3000
 `;
 
 async function main() {

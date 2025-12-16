@@ -25,30 +25,30 @@ bun install
 
 ## Server Setup (VPS)
 
-1. Run interactive setup:
+Run interactive setup (requires sudo):
 ```bash
-bun run src/cli/index.ts init
+sudo bunx fast-ngrok init-server
 ```
-This will ask for:
-- Your domain (e.g., `tunnel.example.com`)
-- Server port (default: 3100)
-- DNS provider for wildcard SSL (Cloudflare, DigitalOcean, Hetzner, etc.)
 
-Generates `.env` and `deploy/Caddyfile`.
+This will:
 
-2. Start server:
-```bash
-bun run server
-```
+- Install fast-ngrok globally
+- Ask for domain, port, DNS provider
+- Generate `.env` and Caddyfile
+- Build Caddy with DNS plugin (for wildcard SSL)
+- Create DNS wildcard record (Cloudflare)
+- Setup and start systemd services
 
 ## Client Setup (Local machine)
 
-1. Configure client:
+Configure client:
+
 ```bash
 bunx fast-ngrok auth
 ```
 
-2. Start tunnel:
+Start tunnel:
+
 ```bash
 bunx fast-ngrok http 3000
 ```
@@ -57,9 +57,10 @@ bunx fast-ngrok http 3000
 
 | Command | Description |
 |---------|-------------|
-| `fast-ngrok http <port>` | Expose local HTTP server |
+| `fast-ngrok init-server` | Setup server (VPS, requires sudo) |
+| `fast-ngrok server` | Run tunnel server daemon |
 | `fast-ngrok auth` | Configure server URL and API key |
-| `fast-ngrok init` | Generate API key (run on server) |
+| `fast-ngrok http <port>` | Expose local HTTP server |
 
 ## TUI Controls
 

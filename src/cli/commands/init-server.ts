@@ -30,6 +30,33 @@ const DNS_PROVIDERS: DnsProvider[] = [
 
 const DEFAULT_INSTALL_DIR = "/opt/fast-ngrok";
 
+async function loadExistingEnv(installDir: string): Promise<Record<string, string> | null> {
+  try {
+    const envPath = join(installDir, ".env");
+    const envFile = Bun.file(envPath);
+    if (!await envFile.exists()) return null;
+
+    const content = await envFile.text();
+    const env: Record<string, string> = {};
+
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+
+      const eqIndex = trimmed.indexOf("=");
+      if (eqIndex === -1) continue;
+
+      const key = trimmed.slice(0, eqIndex).trim();
+      const value = trimmed.slice(eqIndex + 1).trim();
+      env[key] = value;
+    }
+
+    return Object.keys(env).length > 0 ? env : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function initServerCommand(): Promise<void> {
   term.clear();
   term.bold.cyan("Fast-ngrok Server Setup\n\n");
@@ -136,16 +163,23 @@ async function collectConfig(): Promise<InitConfig> {
   const installDir = await inputField(DEFAULT_INSTALL_DIR);
   term("\n");
 
+  // Try to load existing .env for pre-filling
+  const existingEnv = await loadExistingEnv(installDir);
+  if (existingEnv) {
+    term.gray("  (Found existing .env, using values as defaults)\n\n");
+  }
+
   // Domain
   term.white("Base domain for tunnels: ");
-  const domain = await inputField("tunnel.example.com");
+  const domain = await inputField(existingEnv?.BASE_DOMAIN || "tunnel.example.com");
   term("\n");
   term.gray(`  Tunnels will be: *.${domain}\n`);
   term.gray(`  Example: brave-fox-a1b2.${domain}\n`);
 
   // Port
-  term.white("Server port [3100]: ");
-  const portStr = await inputField("3100");
+  const defaultPort = existingEnv?.TUNNEL_PORT || "3100";
+  term.white(`Server port [${defaultPort}]: `);
+  const portStr = await inputField(defaultPort);
   const port = parseInt(portStr, 10) || 3100;
   term("\n");
 
@@ -165,9 +199,20 @@ async function collectConfig(): Promise<InitConfig> {
   term.white("\nSelect DNS provider for wildcard SSL:\n");
   term.gray(`(Required for automatic HTTPS on *.${domain})\n\n`);
 
+  // Find default provider index based on existing .env
+  let defaultProviderIndex = 0;
+  if (existingEnv) {
+    const existingProviderIndex = DNS_PROVIDERS.findIndex(p =>
+      p.envVar && existingEnv[p.envVar]
+    );
+    if (existingProviderIndex !== -1) {
+      defaultProviderIndex = existingProviderIndex;
+    }
+  }
+
   const dnsProviderIndex = await selectMenu(
     DNS_PROVIDERS.map(p => p.name),
-    0
+    defaultProviderIndex
   );
   const selectedProvider = DNS_PROVIDERS[dnsProviderIndex];
   if (!selectedProvider) {
@@ -182,8 +227,9 @@ async function collectConfig(): Promise<InitConfig> {
     term.yellow("\nManual TLS configuration selected.\n");
     term.gray("You'll need to configure certificates in Caddyfile.\n\n");
   } else {
+    const existingToken = selectedProvider.envVar ? existingEnv?.[selectedProvider.envVar] : undefined;
     term.white(`\nEnter ${selectedProvider.envVar}: `);
-    apiToken = await inputField("");
+    apiToken = await inputField(existingToken || "");
     term("\n");
 
     if (!apiToken) {
