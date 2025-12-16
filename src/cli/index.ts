@@ -55,7 +55,9 @@ async function main() {
   }
 
   if (values.version) {
-    const pkg = await Bun.file("./package.json").json();
+    // Use import.meta.dir to find package.json relative to this script
+    const pkgPath = new URL("../../package.json", import.meta.url).pathname;
+    const pkg = await Bun.file(pkgPath).json();
     console.log(`fast-ngrok v${pkg.version}`);
     process.exit(0);
   }
