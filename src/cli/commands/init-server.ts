@@ -530,7 +530,12 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   term.gray(`  Building Caddy with ${dnsProvider} plugin (this may take a minute)...\n`);
   try {
     const xcaddyPath = await findCommand("xcaddy");
-    await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy 2>&1`.text();
+    const result = await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy`.nothrow();
+
+    if (result.exitCode !== 0) {
+      throw result;
+    }
+
     term.green(`  ✓ Built Caddy with ${dnsProvider} plugin\n`);
 
     // Setup Caddy systemd service if not exists
@@ -545,16 +550,37 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
     }
   } catch (error: unknown) {
     term.red(`  ✗ Failed to build Caddy\n`);
-    if (error && typeof error === "object" && "stderr" in error) {
-      const stderr = (error as { stderr: Buffer }).stderr.toString();
-      if (stderr) {
-        term.gray(`  Error: ${stderr.slice(0, 500)}\n`);
+
+    // Extract stderr and stdout
+    let stderr = "";
+    let stdout = "";
+
+    if (error && typeof error === "object") {
+      if ("stderr" in error) {
+        const buf = (error as { stderr: Buffer }).stderr;
+        stderr = buf instanceof Buffer ? buf.toString() : String(buf);
+      }
+      if ("stdout" in error) {
+        const buf = (error as { stdout: Buffer }).stdout;
+        stdout = buf instanceof Buffer ? buf.toString() : String(buf);
       }
     }
-    if (error && typeof error === "object" && "stdout" in error) {
-      const stdout = (error as { stdout: Buffer }).stdout.toString();
-      if (stdout) {
-        term.gray(`  Output: ${stdout.slice(0, 500)}\n`);
+
+    // Show stderr (actual errors) - last 1000 chars
+    if (stderr) {
+      term.red(`  Error:\n`);
+      const lines = stderr.trim().split("\n").slice(-15);
+      for (const line of lines) {
+        term.gray(`    ${line}\n`);
+      }
+    }
+
+    // Show last part of stdout (build errors often appear here too)
+    if (stdout && !stderr) {
+      term.gray(`  Build output (last 15 lines):\n`);
+      const lines = stdout.trim().split("\n").slice(-15);
+      for (const line of lines) {
+        term.gray(`    ${line}\n`);
       }
     }
   }
