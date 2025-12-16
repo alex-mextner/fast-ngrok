@@ -393,20 +393,40 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   if (!hasXcaddy) {
     // Try to install xcaddy
     term.gray("  Installing xcaddy...\n");
+
+    // First ensure Go is installed
+    let hasGo = false;
     try {
-      // Check if Go is installed
       const goResult = await Bun.$`which go`.quiet();
-      if (goResult.exitCode === 0) {
+      hasGo = goResult.exitCode === 0;
+    } catch {
+      hasGo = false;
+    }
+
+    if (!hasGo) {
+      term.gray("  Installing Go...\n");
+      try {
+        await Bun.$`apt-get update && apt-get install -y golang-go`.quiet();
+        term.green("  ✓ Installed Go via apt\n");
+        hasGo = true;
+      } catch {
+        term.yellow("  ⚠ Could not install Go via apt\n");
+      }
+    }
+
+    // Now try to install xcaddy via Go
+    if (hasGo) {
+      try {
         await Bun.$`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`.quiet();
         term.green("  ✓ Installed xcaddy via Go\n");
         hasXcaddy = true;
+      } catch {
+        term.yellow("  ⚠ Could not install xcaddy via Go\n");
       }
-    } catch {
-      // Ignore
     }
 
+    // Fallback: try apt for xcaddy directly
     if (!hasXcaddy) {
-      // Try apt for Debian/Ubuntu
       try {
         await Bun.$`apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl`.quiet();
         await Bun.$`curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg`.quiet();
