@@ -543,13 +543,10 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
 
     term.green(`  ✓ Built Caddy with ${dnsProvider} plugin\n`);
 
-    // Setup Caddy systemd service if not exists
+    // Setup/update Caddy systemd service
     try {
       await Bun.$`which systemctl`.quiet();
-      const serviceExists = await Bun.file("/etc/systemd/system/caddy.service").exists();
-      if (!serviceExists) {
-        await setupCaddySystemd();
-      }
+      await setupCaddySystemd();
     } catch {
       // Ignore
     }
@@ -602,6 +599,7 @@ Requires=network-online.target
 Type=notify
 User=root
 Group=root
+EnvironmentFile=/etc/caddy/.env
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
 TimeoutStopSec=5s
