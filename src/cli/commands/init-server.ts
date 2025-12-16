@@ -3,6 +3,15 @@ import terminalKit from "terminal-kit";
 
 const term = terminalKit.terminal;
 
+// Handle Ctrl+C
+term.on("key", (name: string) => {
+  if (name === "CTRL_C") {
+    term.grabInput(false);
+    term("\n");
+    process.exit(0);
+  }
+});
+
 interface InitConfig {
   domain: string;
   port: number;
