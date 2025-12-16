@@ -1,5 +1,4 @@
 import { join } from "path";
-import { homedir } from "os";
 import terminalKit from "terminal-kit";
 
 const term = terminalKit.terminal;
@@ -10,15 +9,23 @@ interface InitConfig {
   dnsProvider: string;
   apiToken?: string;
   installDir: string;
+  serverIp?: string;
 }
 
-const DNS_PROVIDERS = [
-  { name: "Cloudflare", value: "cloudflare", envVar: "CF_API_TOKEN" },
-  { name: "DigitalOcean", value: "digitalocean", envVar: "DO_AUTH_TOKEN" },
-  { name: "Hetzner", value: "hetzner", envVar: "HETZNER_API_KEY" },
-  { name: "Vultr", value: "vultr", envVar: "VULTR_API_KEY" },
-  { name: "Route53 (AWS)", value: "route53", envVar: "AWS_ACCESS_KEY_ID" },
-  { name: "Manual (I'll configure DNS myself)", value: "manual", envVar: null },
+interface DnsProvider {
+  name: string;
+  value: string;
+  envVar: string | null;
+  caddyModule: string | null;
+}
+
+const DNS_PROVIDERS: DnsProvider[] = [
+  { name: "Cloudflare", value: "cloudflare", envVar: "CF_API_TOKEN", caddyModule: "dns.providers.cloudflare" },
+  { name: "DigitalOcean", value: "digitalocean", envVar: "DO_AUTH_TOKEN", caddyModule: "dns.providers.digitalocean" },
+  { name: "Hetzner", value: "hetzner", envVar: "HETZNER_API_KEY", caddyModule: "dns.providers.hetzner" },
+  { name: "Vultr", value: "vultr", envVar: "VULTR_API_KEY", caddyModule: "dns.providers.vultr" },
+  { name: "Route53 (AWS)", value: "route53", envVar: "AWS_ACCESS_KEY_ID", caddyModule: "dns.providers.route53" },
+  { name: "Manual (I'll configure DNS myself)", value: "manual", envVar: null, caddyModule: null },
 ];
 
 const DEFAULT_INSTALL_DIR = "/opt/fast-ngrok";
@@ -30,61 +37,81 @@ export async function initServerCommand(): Promise<void> {
   // Check if running as root (required for systemd)
   const isRoot = process.getuid?.() === 0;
   if (!isRoot) {
-    term.yellow("Warning: Not running as root. You may need sudo for systemd setup.\n\n");
+    term.red("Error: This command requires root permissions.\n");
+    term.white("Run with: ");
+    term.cyan("sudo bunx fast-ngrok init-server\n\n");
+    process.exit(1);
   }
 
   // Collect configuration
   const config = await collectConfig();
 
+  const totalSteps = config.dnsProvider === "manual" ? 4 : 6;
+  let step = 0;
+
   // Step 1: Install package globally
-  term.white("\n[1/4] Installing fast-ngrok globally...\n");
+  step++;
+  term.white(`\n[${step}/${totalSteps}] Installing fast-ngrok globally...\n`);
   await installGlobalPackage();
 
   // Step 2: Create install directory and config files
-  term.white("\n[2/4] Creating configuration...\n");
+  step++;
+  term.white(`\n[${step}/${totalSteps}] Creating configuration...\n`);
   await createInstallDirectory(config);
   await generateFiles(config);
 
-  // Step 3: Generate and install systemd service
-  term.white("\n[3/4] Setting up systemd service...\n");
+  // Step 3: Setup Caddy (for non-manual)
+  if (config.dnsProvider !== "manual") {
+    step++;
+    term.white(`\n[${step}/${totalSteps}] Setting up Caddy...\n`);
+    await setupCaddy(config);
+  }
+
+  // Step 4: Create DNS wildcard record (for non-manual with token)
+  if (config.dnsProvider !== "manual" && config.apiToken) {
+    step++;
+    term.white(`\n[${step}/${totalSteps}] Creating DNS wildcard record...\n`);
+    await createDnsRecord(config);
+  }
+
+  // Step 5: Generate and install systemd service
+  step++;
+  term.white(`\n[${step}/${totalSteps}] Setting up systemd service...\n`);
   await setupSystemdService(config);
 
-  // Step 4: Show Caddy instructions (only for non-manual)
-  if (config.dnsProvider !== "manual") {
-    term.white("\n[4/4] Caddy setup required\n");
-    term.yellow("\nYou need to install Caddy with DNS plugin:\n");
-    term.cyan(`  xcaddy build --with github.com/caddy-dns/${config.dnsProvider}\n`);
-    term.gray("  sudo mv caddy /usr/bin/caddy\n\n");
-  } else {
-    term.white("\n[4/4] Manual TLS configuration required\n");
-    term.gray("  See Caddyfile for instructions\n\n");
-  }
+  // Step 6: Start services and show logs
+  step++;
+  term.white(`\n[${step}/${totalSteps}] Starting services...\n`);
+  await startServices(config);
 
   // Final summary
   term.green("\n✓ Setup complete!\n\n");
 
   term.white("Configuration:\n");
   term.gray(`  • Install dir: ${config.installDir}\n`);
-  term.gray(`  • .env: ${join(config.installDir, ".env")}\n`);
-  term.gray(`  • Caddyfile: ${join(config.installDir, "Caddyfile")}\n`);
+  term.gray(`  • Domain: ${config.domain}\n`);
+  term.gray(`  • Port: ${config.port}\n`);
 
-  term.white("\nManual steps remaining:\n");
-  term.gray("  1. ");
-  term.white("Configure DNS: ");
-  term.cyan(`*.${config.domain} → this server IP\n`);
+  // Show remaining manual steps if any
+  const manualSteps: string[] = [];
 
-  if (config.dnsProvider !== "manual") {
+  if (config.dnsProvider === "manual") {
+    manualSteps.push(`Configure DNS: *.${config.domain} → ${config.serverIp || "this server IP"}`);
+    manualSteps.push("Configure TLS certificates in Caddyfile");
+  } else if (!config.apiToken) {
     const provider = DNS_PROVIDERS.find(p => p.value === config.dnsProvider);
-    if (provider?.envVar && !config.apiToken) {
-      term.gray("  2. ");
-      term.white(`Set ${provider.envVar} in ${join(config.installDir, ".env")}\n`);
-    }
+    manualSteps.push(`Set ${provider?.envVar} in ${join(config.installDir, ".env")}`);
+    manualSteps.push(`Configure DNS: *.${config.domain} → ${config.serverIp || "this server IP"}`);
+    manualSteps.push("Restart services: sudo systemctl restart caddy fast-ngrok");
   }
 
-  term.white("\nService commands:\n");
-  term.cyan("  sudo systemctl start fast-ngrok\n");
-  term.cyan("  sudo systemctl status fast-ngrok\n");
-  term.cyan("  sudo journalctl -u fast-ngrok -f\n");
+  if (manualSteps.length > 0) {
+    term.yellow("\nManual steps remaining:\n");
+    manualSteps.forEach((s, i) => {
+      term.gray(`  ${i + 1}. `);
+      term.white(`${s}\n`);
+    });
+  }
 
   // Show generated API key
   const envContent = await Bun.file(join(config.installDir, ".env")).text();
@@ -93,6 +120,11 @@ export async function initServerCommand(): Promise<void> {
     term.white("\nAPI Key (save this for client configuration):\n");
     term.bold.yellow(`  ${apiKeyMatch[1]}\n`);
   }
+
+  term.white("\nUseful commands:\n");
+  term.cyan("  journalctl -u fast-ngrok -f    # View logs\n");
+  term.cyan("  systemctl status fast-ngrok    # Check status\n");
+  term.cyan("  systemctl restart fast-ngrok   # Restart\n");
 
   term("\n");
   process.exit(0);
@@ -115,6 +147,18 @@ async function collectConfig(): Promise<InitConfig> {
   const port = parseInt(portStr, 10) || 3100;
   term("\n");
 
+  // Get server IP
+  let serverIp: string | undefined;
+  try {
+    const result = await Bun.$`curl -s ifconfig.me`.text();
+    serverIp = result.trim();
+    if (serverIp) {
+      term.gray(`  Detected server IP: ${serverIp}\n`);
+    }
+  } catch {
+    // Ignore
+  }
+
   // DNS Provider
   term.white("\nSelect DNS provider for wildcard SSL:\n");
   term.gray(`(Required for automatic HTTPS on *.${domain})\n\n`);
@@ -136,9 +180,13 @@ async function collectConfig(): Promise<InitConfig> {
     term.yellow("\nManual TLS configuration selected.\n");
     term.gray("You'll need to configure certificates in Caddyfile.\n\n");
   } else {
-    term.white(`\nEnter ${selectedProvider.envVar} (optional, can set later): `);
+    term.white(`\nEnter ${selectedProvider.envVar}: `);
     apiToken = await inputField("");
     term("\n");
+
+    if (!apiToken) {
+      term.yellow("  No token provided - DNS record and SSL will need manual setup\n");
+    }
   }
 
   return {
@@ -147,6 +195,7 @@ async function collectConfig(): Promise<InitConfig> {
     dnsProvider: selectedProvider.value,
     apiToken: apiToken || undefined,
     installDir,
+    serverIp,
   };
 }
 
@@ -172,7 +221,7 @@ async function installGlobalPackage(): Promise<void> {
       await Bun.$`npm install -g fast-ngrok`.quiet();
     }
     term.green(`  ✓ Installed globally via ${pkgManager}\n`);
-  } catch (error) {
+  } catch {
     term.yellow(`  ⚠ Global install failed (may already be installed)\n`);
   }
 }
@@ -207,6 +256,7 @@ CADDY_ADMIN_URL=http://localhost:2019
 
   const envPath = join(config.installDir, ".env");
   await Bun.write(envPath, envContent);
+  await Bun.$`chmod 600 ${envPath}`.quiet();
   term.green(`  ✓ Created ${envPath}\n`);
 
   // Generate Caddyfile
@@ -275,18 +325,340 @@ ${tlsBlock}
 `;
 }
 
+async function setupCaddy(config: InitConfig): Promise<void> {
+  const provider = DNS_PROVIDERS.find(p => p.value === config.dnsProvider);
+  if (!provider?.caddyModule) return;
+
+  // Check if Caddy is installed
+  let caddyInstalled = false;
+  try {
+    const result = await Bun.$`which caddy`.quiet();
+    caddyInstalled = result.exitCode === 0;
+  } catch {
+    caddyInstalled = false;
+  }
+
+  if (!caddyInstalled) {
+    term.gray("  Caddy not found, installing...\n");
+    await installCaddyWithPlugin(config.dnsProvider);
+    return;
+  }
+
+  // Check if DNS plugin is installed
+  let hasPlugin = false;
+  try {
+    const result = await Bun.$`caddy list-modules`.text();
+    hasPlugin = result.includes(provider.caddyModule);
+  } catch {
+    hasPlugin = false;
+  }
+
+  if (hasPlugin) {
+    term.green(`  ✓ Caddy already has ${config.dnsProvider} plugin\n`);
+  } else {
+    term.yellow(`  Caddy missing ${config.dnsProvider} plugin, rebuilding...\n`);
+    await installCaddyWithPlugin(config.dnsProvider);
+  }
+
+  // Create symlink for Caddyfile
+  const caddyPath = join(config.installDir, "Caddyfile");
+  try {
+    await Bun.$`ln -sf ${caddyPath} /etc/caddy/Caddyfile`.quiet();
+    term.green(`  ✓ Linked Caddyfile to /etc/caddy/Caddyfile\n`);
+  } catch {
+    term.yellow(`  ⚠ Could not link Caddyfile\n`);
+  }
+
+  // Copy env file for Caddy to read
+  const envPath = join(config.installDir, ".env");
+  try {
+    await Bun.$`ln -sf ${envPath} /etc/caddy/.env`.quiet();
+  } catch {
+    // Ignore
+  }
+}
+
+async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
+  // Check if xcaddy is available
+  let hasXcaddy = false;
+  try {
+    const result = await Bun.$`which xcaddy`.quiet();
+    hasXcaddy = result.exitCode === 0;
+  } catch {
+    hasXcaddy = false;
+  }
+
+  if (!hasXcaddy) {
+    // Try to install xcaddy
+    term.gray("  Installing xcaddy...\n");
+    try {
+      // Check if Go is installed
+      const goResult = await Bun.$`which go`.quiet();
+      if (goResult.exitCode === 0) {
+        await Bun.$`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`.quiet();
+        term.green("  ✓ Installed xcaddy via Go\n");
+        hasXcaddy = true;
+      }
+    } catch {
+      // Ignore
+    }
+
+    if (!hasXcaddy) {
+      // Try apt for Debian/Ubuntu
+      try {
+        await Bun.$`apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl`.quiet();
+        await Bun.$`curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg`.quiet();
+        await Bun.$`curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-xcaddy.list`.quiet();
+        await Bun.$`apt-get update && apt-get install -y xcaddy`.quiet();
+        term.green("  ✓ Installed xcaddy via apt\n");
+        hasXcaddy = true;
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  if (!hasXcaddy) {
+    term.red("  ✗ Could not install xcaddy. Please install manually:\n");
+    term.cyan("    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest\n");
+    term.white("  Then run this command again.\n");
+    return;
+  }
+
+  // Build Caddy with DNS plugin
+  term.gray(`  Building Caddy with ${dnsProvider} plugin (this may take a minute)...\n`);
+  try {
+    const xcaddyPath = await findCommand("xcaddy");
+    await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy`.quiet();
+    term.green(`  ✓ Built Caddy with ${dnsProvider} plugin\n`);
+
+    // Setup Caddy systemd service if not exists
+    try {
+      await Bun.$`which systemctl`.quiet();
+      const serviceExists = await Bun.file("/etc/systemd/system/caddy.service").exists();
+      if (!serviceExists) {
+        await setupCaddySystemd();
+      }
+    } catch {
+      // Ignore
+    }
+  } catch (error) {
+    term.red(`  ✗ Failed to build Caddy: ${error}\n`);
+  }
+}
+
+async function setupCaddySystemd(): Promise<void> {
+  const caddyService = `[Unit]
+Description=Caddy
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+  try {
+    await Bun.$`mkdir -p /etc/caddy`.quiet();
+    await Bun.write("/etc/systemd/system/caddy.service", caddyService);
+    await Bun.$`systemctl daemon-reload`.quiet();
+    await Bun.$`systemctl enable caddy`.quiet();
+    term.green("  ✓ Created Caddy systemd service\n");
+  } catch {
+    term.yellow("  ⚠ Could not create Caddy systemd service\n");
+  }
+}
+
+async function createDnsRecord(config: InitConfig): Promise<void> {
+  if (!config.apiToken || !config.serverIp) {
+    term.yellow("  ⚠ Skipping DNS setup (missing token or server IP)\n");
+    return;
+  }
+
+  if (config.dnsProvider === "cloudflare") {
+    await createCloudflareDnsRecord(config);
+  } else {
+    term.gray(`  Auto DNS setup not implemented for ${config.dnsProvider}\n`);
+    term.gray(`  Please manually create: *.${config.domain} → ${config.serverIp}\n`);
+  }
+}
+
+async function createCloudflareDnsRecord(config: InitConfig): Promise<void> {
+  if (!config.apiToken || !config.serverIp) return;
+
+  try {
+    // Extract base domain (e.g., example.com from tunnel.example.com)
+    const domainParts = config.domain.split(".");
+    const baseDomain = domainParts.slice(-2).join(".");
+
+    // Get zone ID
+    term.gray(`  Finding Cloudflare zone for ${baseDomain}...\n`);
+    const zonesResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/zones?name=${baseDomain}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    const zonesData = await zonesResponse.json() as { success: boolean; result: Array<{ id: string }> };
+
+    if (!zonesData.success || !zonesData.result?.[0]?.id) {
+      term.yellow("  ⚠ Could not find Cloudflare zone\n");
+      return;
+    }
+
+    const zoneId = zonesData.result[0].id;
+
+    // Check if wildcard record already exists
+    const recordName = `*.${config.domain}`;
+    const existingResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?name=${recordName}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    const existingData = await existingResponse.json() as { success: boolean; result: Array<{ id: string }> };
+
+    const existingRecord = existingData.result?.[0];
+    if (existingRecord) {
+      // Update existing record
+      const recordId = existingRecord.id;
+      await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "A",
+            name: recordName,
+            content: config.serverIp,
+            proxied: false,
+            ttl: 1, // Auto
+          }),
+        }
+      );
+      term.green(`  ✓ Updated DNS record: ${recordName} → ${config.serverIp}\n`);
+    } else {
+      // Create new record
+      await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "A",
+            name: recordName,
+            content: config.serverIp,
+            proxied: false,
+            ttl: 1, // Auto
+          }),
+        }
+      );
+      term.green(`  ✓ Created DNS record: ${recordName} → ${config.serverIp}\n`);
+    }
+
+    // Also create record for base domain (without wildcard)
+    const baseRecordResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?name=${config.domain}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    const baseRecordData = await baseRecordResponse.json() as { success: boolean; result: Array<{ id: string }> };
+
+    const existingBaseRecord = baseRecordData.result?.[0];
+    if (existingBaseRecord) {
+      const recordId = existingBaseRecord.id;
+      await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "A",
+            name: config.domain,
+            content: config.serverIp,
+            proxied: false,
+            ttl: 1,
+          }),
+        }
+      );
+    } else {
+      await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "A",
+            name: config.domain,
+            content: config.serverIp,
+            proxied: false,
+            ttl: 1,
+          }),
+        }
+      );
+    }
+    term.green(`  ✓ Created DNS record: ${config.domain} → ${config.serverIp}\n`);
+  } catch (error) {
+    term.yellow(`  ⚠ Could not create DNS record: ${error}\n`);
+    term.gray(`  Please manually create: *.${config.domain} → ${config.serverIp}\n`);
+  }
+}
+
 async function setupSystemdService(config: InitConfig): Promise<void> {
   const useBun = await hasBun();
-  const runtime = useBun ? "bun" : "node";
-  const runtimePath = useBun ? "/usr/bin/bun" : "/usr/bin/node";
 
-  // Try to find actual path
-  let execPath = runtimePath;
+  // Find the actual path to fast-ngrok
+  let execCommand: string;
   try {
-    const result = await Bun.$`which ${runtime}`.text();
-    execPath = result.trim() || runtimePath;
+    const globalBinPath = await Bun.$`which fast-ngrok`.text();
+    execCommand = globalBinPath.trim();
   } catch {
-    // Use default
+    // Fallback
+    execCommand = useBun ? "/usr/local/bin/fast-ngrok" : "/usr/bin/fast-ngrok";
+  }
+
+  // Find runtime path
+  let runtimePath: string;
+  try {
+    const result = await Bun.$`which ${useBun ? "bun" : "node"}`.text();
+    runtimePath = result.trim();
+  } catch {
+    runtimePath = useBun ? "/usr/bin/bun" : "/usr/bin/node";
   }
 
   const serviceContent = `[Unit]
@@ -299,7 +671,7 @@ Type=simple
 User=root
 WorkingDirectory=${config.installDir}
 EnvironmentFile=${config.installDir}/.env
-ExecStart=${execPath} /usr/local/bin/fast-ngrok server
+ExecStart=${runtimePath} ${execCommand} server
 Restart=always
 RestartSec=5
 
@@ -313,17 +685,65 @@ WantedBy=multi-user.target
     await Bun.write(servicePath, serviceContent);
     term.green(`  ✓ Created ${servicePath}\n`);
 
-    // Reload systemd
     await Bun.$`systemctl daemon-reload`.quiet();
     term.green("  ✓ Reloaded systemd\n");
 
-    // Enable service
     await Bun.$`systemctl enable fast-ngrok`.quiet();
     term.green("  ✓ Enabled fast-ngrok service\n");
   } catch (error) {
-    term.yellow(`  ⚠ Systemd setup requires root permissions\n`);
-    term.gray(`  Run with sudo or manually create:\n`);
-    term.gray(`  ${servicePath}\n`);
+    term.red(`  ✗ Systemd setup failed: ${error}\n`);
+  }
+}
+
+async function startServices(config: InitConfig): Promise<void> {
+  // Start Caddy if not manual
+  if (config.dnsProvider !== "manual") {
+    try {
+      await Bun.$`systemctl restart caddy`.quiet();
+      term.green("  ✓ Started Caddy\n");
+    } catch {
+      term.yellow("  ⚠ Could not start Caddy\n");
+    }
+  }
+
+  // Start fast-ngrok
+  try {
+    await Bun.$`systemctl start fast-ngrok`.quiet();
+    term.green("  ✓ Started fast-ngrok\n");
+  } catch {
+    term.yellow("  ⚠ Could not start fast-ngrok\n");
+  }
+
+  // Show logs for a few seconds
+  term.white("\n  Recent logs:\n");
+  term.gray("  ─────────────────────────────────\n");
+
+  try {
+    // Give services time to start
+    await Bun.sleep(1000);
+
+    // Show recent logs
+    const logs = await Bun.$`journalctl -u fast-ngrok -u caddy --no-pager -n 10 --since "10 seconds ago" 2>/dev/null || true`.text();
+    if (logs.trim()) {
+      for (const line of logs.trim().split("\n").slice(0, 10)) {
+        term.gray(`  ${line}\n`);
+      }
+    } else {
+      term.gray("  (no logs yet)\n");
+    }
+  } catch {
+    term.gray("  (could not read logs)\n");
+  }
+
+  term.gray("  ─────────────────────────────────\n");
+}
+
+async function findCommand(cmd: string): Promise<string> {
+  try {
+    const result = await Bun.$`which ${cmd}`.text();
+    return result.trim();
+  } catch {
+    return cmd;
   }
 }
 
