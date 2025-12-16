@@ -1,0 +1,21 @@
+{
+  "name": "fast-ngrok",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "fast-ngrok": "./src/cli/index.ts"
+  },
+  "scripts": {
+    "server": "bun run src/server/index.ts",
+    "dev": "bun --hot src/server/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "terminal-kit": "^3.1.2"
+  }
+}
