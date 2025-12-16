@@ -404,17 +404,33 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
     }
 
     if (!hasGo) {
-      term.gray("  Installing Go...\n");
+      term.gray("  Installing Go via apt...\n");
       try {
-        await Bun.$`apt-get update`.quiet();
-        await Bun.$`apt-get install -y golang-go`.quiet();
-        term.green("  ✓ Installed Go via apt\n");
-        hasGo = true;
+        // Show apt output for debugging
+        await Bun.$`apt-get update 2>&1`.text();
+        term.gray(`  apt update done\n`);
+
+        const installResult = await Bun.$`apt-get install -y golang-go 2>&1`.text();
+        term.gray(`  apt install done\n`);
+
+        // Verify Go was actually installed
+        const goCheck = await Bun.$`/usr/bin/go version 2>&1`.nothrow().text();
+        if (goCheck.includes("go version")) {
+          term.green(`  ✓ Installed Go: ${goCheck.trim()}\n`);
+          hasGo = true;
+        } else {
+          term.yellow(`  ⚠ Go installed but not working: ${goCheck}\n`);
+          term.gray(`  Install output: ${installResult.slice(-300)}\n`);
+        }
       } catch (e: unknown) {
         term.yellow("  ⚠ Could not install Go via apt\n");
         if (e && typeof e === "object" && "stderr" in e) {
           const stderr = (e as { stderr: Buffer }).stderr.toString();
-          if (stderr) term.gray(`  ${stderr.slice(0, 200)}\n`);
+          if (stderr) term.gray(`  stderr: ${stderr.slice(0, 300)}\n`);
+        }
+        if (e && typeof e === "object" && "stdout" in e) {
+          const stdout = (e as { stdout: Buffer }).stdout.toString();
+          if (stdout) term.gray(`  stdout: ${stdout.slice(-300)}\n`);
         }
       }
     }
