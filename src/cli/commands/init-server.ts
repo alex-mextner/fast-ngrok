@@ -451,7 +451,7 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   term.gray(`  Building Caddy with ${dnsProvider} plugin (this may take a minute)...\n`);
   try {
     const xcaddyPath = await findCommand("xcaddy");
-    await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy`.quiet();
+    await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy 2>&1`.text();
     term.green(`  ✓ Built Caddy with ${dnsProvider} plugin\n`);
 
     // Setup Caddy systemd service if not exists
@@ -464,8 +464,20 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
     } catch {
       // Ignore
     }
-  } catch (error) {
-    term.red(`  ✗ Failed to build Caddy: ${error}\n`);
+  } catch (error: unknown) {
+    term.red(`  ✗ Failed to build Caddy\n`);
+    if (error && typeof error === "object" && "stderr" in error) {
+      const stderr = (error as { stderr: Buffer }).stderr.toString();
+      if (stderr) {
+        term.gray(`  Error: ${stderr.slice(0, 500)}\n`);
+      }
+    }
+    if (error && typeof error === "object" && "stdout" in error) {
+      const stdout = (error as { stdout: Buffer }).stdout.toString();
+      if (stdout) {
+        term.gray(`  Output: ${stdout.slice(0, 500)}\n`);
+      }
+    }
   }
 }
 
