@@ -13,6 +13,8 @@ Simple single-user ngrok alternative with WebSocket tunneling and Caddy integrat
 ## Installation
 
 ```bash
+git clone https://github.com/alex-mextner/fast-ngrok.git
+cd fast-ngrok
 bun install
 ```
 

@@ -7,8 +7,7 @@ Single-user ngrok alternative with WebSocket tunneling and Caddy integration.
 ### Server (VPS)
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/alex-mextner/fast-ngrok.git && cd fast-ngrok
+# 1. Install
 bun install
 
 # 2. Generate API key
