@@ -1,4 +1,4 @@
-import { join } from "path";
+import { join } from "node:path";
 import terminalKit from "terminal-kit";
 
 const term = terminalKit.terminal;
@@ -137,9 +137,11 @@ async function collectConfig(): Promise<InitConfig> {
   term("\n");
 
   // Domain
-  term.white("Enter your domain (e.g., tunnel.example.com): ");
+  term.white("Base domain for tunnels: ");
   const domain = await inputField("tunnel.example.com");
   term("\n");
+  term.gray(`  Tunnels will be: *.${domain}\n`);
+  term.gray(`  Example: brave-fox-a1b2.${domain}\n`);
 
   // Port
   term.white("Server port [3100]: ");
