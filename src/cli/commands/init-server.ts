@@ -428,58 +428,80 @@ async function setupCaddy(config: InitConfig): Promise<void> {
 
 async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   // First ensure Go is installed (required for xcaddy build)
+  // Check for Go >= 1.23 (required for latest Caddy)
   let hasGo = false;
+  let goPath = "";
+
+  // Check system Go first
   try {
-    const goResult = await Bun.$`which go`.quiet();
-    hasGo = goResult.exitCode === 0;
+    const goResult = await Bun.$`/usr/local/go/bin/go version`.nothrow().text();
+    if (goResult.includes("go version")) {
+      const match = goResult.match(/go(\d+)\.(\d+)/);
+      if (match) {
+        const major = parseInt(match[1], 10);
+        const minor = parseInt(match[2], 10);
+        if (major >= 1 && minor >= 23) {
+          hasGo = true;
+          goPath = "/usr/local/go/bin/go";
+          term.green(`  ✓ Go already installed: ${goResult.trim()}\n`);
+        } else {
+          term.gray(`  Go ${major}.${minor} is too old, need 1.23+\n`);
+        }
+      }
+    }
   } catch {
-    hasGo = false;
+    // Not installed
   }
 
   if (!hasGo) {
-    term.gray("  Installing Go via apt...\n");
+    term.gray("  Installing Go 1.23 from golang.org...\n");
     try {
-      await Bun.$`apt-get update 2>&1`.text();
-      term.gray(`  apt update done\n`);
+      // Download and extract Go
+      const goVersion = "1.23.4";
+      const goArch = process.arch === "arm64" ? "arm64" : "amd64";
+      const goUrl = `https://go.dev/dl/go${goVersion}.linux-${goArch}.tar.gz`;
 
-      const installResult = await Bun.$`apt-get install -y golang-go 2>&1`.text();
-      term.gray(`  apt install done\n`);
+      term.gray(`  Downloading ${goUrl}...\n`);
+      await Bun.$`rm -rf /usr/local/go`.nothrow();
+      await Bun.$`curl -fsSL ${goUrl} | tar -C /usr/local -xzf -`;
 
-      // Verify Go was actually installed
-      const goCheck = await Bun.$`/usr/bin/go version 2>&1`.nothrow().text();
+      // Verify installation
+      const goCheck = await Bun.$`/usr/local/go/bin/go version`.nothrow().text();
       if (goCheck.includes("go version")) {
         term.green(`  ✓ Installed Go: ${goCheck.trim()}\n`);
         hasGo = true;
+        goPath = "/usr/local/go/bin/go";
       } else {
-        term.yellow(`  ⚠ Go installed but not working: ${goCheck}\n`);
-        term.gray(`  Install output: ${installResult.slice(-300)}\n`);
+        term.yellow(`  ⚠ Go installed but not working\n`);
       }
     } catch (e: unknown) {
-      term.yellow("  ⚠ Could not install Go via apt\n");
+      term.yellow("  ⚠ Could not install Go\n");
       if (e && typeof e === "object" && "stderr" in e) {
         const stderr = (e as { stderr: Buffer }).stderr.toString();
-        if (stderr) term.gray(`  stderr: ${stderr.slice(0, 300)}\n`);
-      }
-      if (e && typeof e === "object" && "stdout" in e) {
-        const stdout = (e as { stdout: Buffer }).stdout.toString();
-        if (stdout) term.gray(`  stdout: ${stdout.slice(-300)}\n`);
+        if (stderr) term.gray(`  ${stderr.slice(0, 300)}\n`);
       }
     }
-  } else {
-    const goVer = await Bun.$`go version 2>&1`.nothrow().text();
-    term.green(`  ✓ Go already installed: ${goVer.trim()}\n`);
   }
 
   if (!hasGo) {
     term.red("  ✗ Go is required to build Caddy with plugins\n");
-    term.white("  Install manually: apt install golang-go\n");
+    term.white("  Install manually from https://go.dev/dl/\n");
     return;
   }
 
+  // Set up Go environment
+  const home = process.env.HOME || "/root";
+  const goRoot = "/usr/local/go";
+  const goPathDir = `${home}/go`;
+  process.env.GOROOT = goRoot;
+  process.env.GOPATH = goPathDir;
+  process.env.PATH = `${goRoot}/bin:${goPathDir}/bin:${process.env.PATH}`;
+
   // Check if xcaddy is available
+  const xcaddyPath = `${goPathDir}/bin/xcaddy`;
   let hasXcaddy = false;
   try {
-    const result = await Bun.$`which xcaddy`.quiet();
+    const result = await Bun.$`test -f ${xcaddyPath}`.nothrow();
     hasXcaddy = result.exitCode === 0;
   } catch {
     hasXcaddy = false;
@@ -488,31 +510,15 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   if (!hasXcaddy) {
     term.gray("  Installing xcaddy...\n");
 
-    // Try to install xcaddy via Go
     try {
-      const home = process.env.HOME || "/root";
-      process.env.GOPATH = `${home}/go`;
-      process.env.PATH = `${process.env.PATH}:${home}/go/bin`;
-
-      await Bun.$`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`.quiet();
-      term.green("  ✓ Installed xcaddy via Go\n");
+      await Bun.$`${goPath} install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`;
+      term.green("  ✓ Installed xcaddy\n");
       hasXcaddy = true;
     } catch (e: unknown) {
-      term.yellow("  ⚠ Could not install xcaddy via Go\n");
+      term.yellow("  ⚠ Could not install xcaddy\n");
       if (e && typeof e === "object" && "stderr" in e) {
         const stderr = (e as { stderr: Buffer }).stderr.toString();
         if (stderr) term.gray(`  ${stderr.slice(0, 200)}\n`);
-      }
-    }
-
-    // Fallback: try apt for xcaddy directly
-    if (!hasXcaddy) {
-      try {
-        await Bun.$`apt-get install -y xcaddy 2>&1`.text();
-        term.green("  ✓ Installed xcaddy via apt\n");
-        hasXcaddy = true;
-      } catch {
-        // Ignore
       }
     }
   } else {
@@ -521,7 +527,7 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
 
   if (!hasXcaddy) {
     term.red("  ✗ Could not install xcaddy. Please install manually:\n");
-    term.cyan("    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest\n");
+    term.cyan(`    ${goPath} install github.com/caddyserver/xcaddy/cmd/xcaddy@latest\n`);
     term.white("  Then run this command again.\n");
     return;
   }
@@ -529,7 +535,6 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   // Build Caddy with DNS plugin
   term.gray(`  Building Caddy with ${dnsProvider} plugin (this may take a minute)...\n`);
   try {
-    const xcaddyPath = await findCommand("xcaddy");
     const result = await Bun.$`${xcaddyPath} build --with github.com/caddy-dns/${dnsProvider} --output /usr/bin/caddy`.nothrow();
 
     if (result.exitCode !== 0) {
@@ -865,15 +870,6 @@ async function startServices(config: InitConfig): Promise<void> {
   }
 
   term.gray("  ─────────────────────────────────\n");
-}
-
-async function findCommand(cmd: string): Promise<string> {
-  try {
-    const result = await Bun.$`which ${cmd}`.text();
-    return result.trim();
-  } catch {
-    return cmd;
-  }
 }
 
 function generateApiKey(): string {
