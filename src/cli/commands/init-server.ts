@@ -642,8 +642,6 @@ async function createCloudflareDnsRecord(config: InitConfig): Promise<void> {
 }
 
 async function setupSystemdService(config: InitConfig): Promise<void> {
-  const useBun = await hasBun();
-
   // Find the actual path to fast-ngrok
   let execCommand: string;
   try {
@@ -651,16 +649,8 @@ async function setupSystemdService(config: InitConfig): Promise<void> {
     execCommand = globalBinPath.trim();
   } catch {
     // Fallback
+    const useBun = await hasBun();
     execCommand = useBun ? "/usr/local/bin/fast-ngrok" : "/usr/bin/fast-ngrok";
-  }
-
-  // Find runtime path
-  let runtimePath: string;
-  try {
-    const result = await Bun.$`which ${useBun ? "bun" : "node"}`.text();
-    runtimePath = result.trim();
-  } catch {
-    runtimePath = useBun ? "/usr/bin/bun" : "/usr/bin/node";
   }
 
   const serviceContent = `[Unit]
@@ -673,7 +663,7 @@ Type=simple
 User=root
 WorkingDirectory=${config.installDir}
 EnvironmentFile=${config.installDir}/.env
-ExecStart=${runtimePath} ${execCommand} server
+ExecStart=${execCommand} server
 Restart=always
 RestartSec=5
 
