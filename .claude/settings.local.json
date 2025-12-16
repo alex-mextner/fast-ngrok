@@ -4,7 +4,10 @@
       "Bash(bun run:*)",
       "Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
       "Bash(bun:*)",
-      "Bash(timeout 2 bun run:*)"
+      "Bash(timeout 2 bun run:*)",
+      "Bash(npm version:*)",
+      "Bash(npm publish)",
+      "Bash(git push)"
     ]
   }
 }
