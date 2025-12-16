@@ -381,6 +381,55 @@ async function setupCaddy(config: InitConfig): Promise<void> {
 }
 
 async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
+  // First ensure Go is installed (required for xcaddy build)
+  let hasGo = false;
+  try {
+    const goResult = await Bun.$`which go`.quiet();
+    hasGo = goResult.exitCode === 0;
+  } catch {
+    hasGo = false;
+  }
+
+  if (!hasGo) {
+    term.gray("  Installing Go via apt...\n");
+    try {
+      await Bun.$`apt-get update 2>&1`.text();
+      term.gray(`  apt update done\n`);
+
+      const installResult = await Bun.$`apt-get install -y golang-go 2>&1`.text();
+      term.gray(`  apt install done\n`);
+
+      // Verify Go was actually installed
+      const goCheck = await Bun.$`/usr/bin/go version 2>&1`.nothrow().text();
+      if (goCheck.includes("go version")) {
+        term.green(`  ✓ Installed Go: ${goCheck.trim()}\n`);
+        hasGo = true;
+      } else {
+        term.yellow(`  ⚠ Go installed but not working: ${goCheck}\n`);
+        term.gray(`  Install output: ${installResult.slice(-300)}\n`);
+      }
+    } catch (e: unknown) {
+      term.yellow("  ⚠ Could not install Go via apt\n");
+      if (e && typeof e === "object" && "stderr" in e) {
+        const stderr = (e as { stderr: Buffer }).stderr.toString();
+        if (stderr) term.gray(`  stderr: ${stderr.slice(0, 300)}\n`);
+      }
+      if (e && typeof e === "object" && "stdout" in e) {
+        const stdout = (e as { stdout: Buffer }).stdout.toString();
+        if (stdout) term.gray(`  stdout: ${stdout.slice(-300)}\n`);
+      }
+    }
+  } else {
+    const goVer = await Bun.$`go version 2>&1`.nothrow().text();
+    term.green(`  ✓ Go already installed: ${goVer.trim()}\n`);
+  }
+
+  if (!hasGo) {
+    term.red("  ✗ Go is required to build Caddy with plugins\n");
+    term.white("  Install manually: apt install golang-go\n");
+    return;
+  }
+
   // Check if xcaddy is available
   let hasXcaddy = false;
   try {
@@ -391,83 +440,37 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
   }
 
   if (!hasXcaddy) {
-    // Try to install xcaddy
     term.gray("  Installing xcaddy...\n");
 
-    // First ensure Go is installed
-    let hasGo = false;
+    // Try to install xcaddy via Go
     try {
-      const goResult = await Bun.$`which go`.quiet();
-      hasGo = goResult.exitCode === 0;
-    } catch {
-      hasGo = false;
-    }
+      const home = process.env.HOME || "/root";
+      process.env.GOPATH = `${home}/go`;
+      process.env.PATH = `${process.env.PATH}:${home}/go/bin`;
 
-    if (!hasGo) {
-      term.gray("  Installing Go via apt...\n");
-      try {
-        // Show apt output for debugging
-        await Bun.$`apt-get update 2>&1`.text();
-        term.gray(`  apt update done\n`);
-
-        const installResult = await Bun.$`apt-get install -y golang-go 2>&1`.text();
-        term.gray(`  apt install done\n`);
-
-        // Verify Go was actually installed
-        const goCheck = await Bun.$`/usr/bin/go version 2>&1`.nothrow().text();
-        if (goCheck.includes("go version")) {
-          term.green(`  ✓ Installed Go: ${goCheck.trim()}\n`);
-          hasGo = true;
-        } else {
-          term.yellow(`  ⚠ Go installed but not working: ${goCheck}\n`);
-          term.gray(`  Install output: ${installResult.slice(-300)}\n`);
-        }
-      } catch (e: unknown) {
-        term.yellow("  ⚠ Could not install Go via apt\n");
-        if (e && typeof e === "object" && "stderr" in e) {
-          const stderr = (e as { stderr: Buffer }).stderr.toString();
-          if (stderr) term.gray(`  stderr: ${stderr.slice(0, 300)}\n`);
-        }
-        if (e && typeof e === "object" && "stdout" in e) {
-          const stdout = (e as { stdout: Buffer }).stdout.toString();
-          if (stdout) term.gray(`  stdout: ${stdout.slice(-300)}\n`);
-        }
-      }
-    }
-
-    // Now try to install xcaddy via Go
-    if (hasGo) {
-      try {
-        // Set GOPATH and update PATH for go install
-        const home = process.env.HOME || "/root";
-        process.env.GOPATH = `${home}/go`;
-        process.env.PATH = `${process.env.PATH}:${home}/go/bin`;
-
-        await Bun.$`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`.quiet();
-        term.green("  ✓ Installed xcaddy via Go\n");
-        hasXcaddy = true;
-      } catch (e: unknown) {
-        term.yellow("  ⚠ Could not install xcaddy via Go\n");
-        if (e && typeof e === "object" && "stderr" in e) {
-          const stderr = (e as { stderr: Buffer }).stderr.toString();
-          if (stderr) term.gray(`  ${stderr.slice(0, 200)}\n`);
-        }
+      await Bun.$`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`.quiet();
+      term.green("  ✓ Installed xcaddy via Go\n");
+      hasXcaddy = true;
+    } catch (e: unknown) {
+      term.yellow("  ⚠ Could not install xcaddy via Go\n");
+      if (e && typeof e === "object" && "stderr" in e) {
+        const stderr = (e as { stderr: Buffer }).stderr.toString();
+        if (stderr) term.gray(`  ${stderr.slice(0, 200)}\n`);
       }
     }
 
     // Fallback: try apt for xcaddy directly
     if (!hasXcaddy) {
       try {
-        await Bun.$`apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl`.quiet();
-        await Bun.$`curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg`.quiet();
-        await Bun.$`curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-xcaddy.list`.quiet();
-        await Bun.$`apt-get update && apt-get install -y xcaddy`.quiet();
+        await Bun.$`apt-get install -y xcaddy 2>&1`.text();
         term.green("  ✓ Installed xcaddy via apt\n");
         hasXcaddy = true;
       } catch {
         // Ignore
       }
     }
+  } else {
+    term.green("  ✓ xcaddy already installed\n");
   }
 
   if (!hasXcaddy) {
