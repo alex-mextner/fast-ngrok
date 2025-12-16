@@ -1,8 +1,20 @@
 import { getConfig } from "../config.ts";
 import { TunnelClient } from "../tunnel-client.ts";
 import { TUI } from "../tui/index.ts";
+import {
+  LocalShortcut,
+  shouldEnableLocalShortcut,
+  preSetupLocalShortcut,
+} from "../local-shortcut/index.ts";
 
-export async function httpCommand(args: string[]): Promise<void> {
+export interface HttpCommandOptions {
+  noLocalShortcut: boolean;
+}
+
+export async function httpCommand(
+  args: string[],
+  options: HttpCommandOptions
+): Promise<void> {
   const port = parseInt(args[0] || "", 10);
 
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -19,6 +31,8 @@ export async function httpCommand(args: string[]): Promise<void> {
   }
 
   const tui = new TUI(port);
+  const enableLocalShortcut = shouldEnableLocalShortcut(options.noLocalShortcut);
+  let localShortcut: LocalShortcut | null = null;
 
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
@@ -33,8 +47,21 @@ export async function httpCommand(args: string[]): Promise<void> {
       tui.updateRequest(id, status, duration, error);
     },
 
-    onConnect: (subdomain, publicUrl) => {
+    onConnect: async (subdomain, publicUrl) => {
       tui.setConnected(subdomain, publicUrl);
+
+      // Setup local shortcut AFTER successful server auth
+      if (enableLocalShortcut) {
+        const certPaths = await preSetupLocalShortcut(config.serverUrl);
+        if (certPaths) {
+          localShortcut = new LocalShortcut({
+            localPort: port,
+            certPaths,
+          });
+          const hostname = new URL(publicUrl).hostname;
+          await localShortcut.activate(hostname);
+        }
+      }
     },
 
     onDisconnect: () => {
@@ -46,8 +73,11 @@ export async function httpCommand(args: string[]): Promise<void> {
     },
   });
 
-  // Handle Ctrl+C
-  process.on("SIGINT", () => {
+  // Handle Ctrl+C - cleanup local shortcut
+  process.on("SIGINT", async () => {
+    if (localShortcut) {
+      await localShortcut.stop();
+    }
     tui.destroy();
     client.disconnect();
     process.exit(0);

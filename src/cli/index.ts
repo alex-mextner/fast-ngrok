@@ -13,14 +13,22 @@ Commands:
   auth         Configure server URL and API key
   init         Generate API key (run on server)
 
+Options (for http command):
+  --no-local-shortcut  Disable local shortcut (macOS only)
+                       By default, local requests bypass tunnel
+
 Usage:
   bunx fast-ngrok http 3000
+  bunx fast-ngrok http 3000 --no-local-shortcut
   bunx fast-ngrok auth
   bunx fast-ngrok init
 
 Examples:
   # Start tunnel to local dev server
   bunx fast-ngrok http 3000
+
+  # Start tunnel without local shortcut
+  bunx fast-ngrok http 3000 --no-local-shortcut
 
   # Configure client with server credentials
   bunx fast-ngrok auth
@@ -35,6 +43,7 @@ async function main() {
     options: {
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
+      "no-local-shortcut": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -54,7 +63,9 @@ async function main() {
 
   switch (command) {
     case "http":
-      await httpCommand(positionals.slice(1));
+      await httpCommand(positionals.slice(1), {
+        noLocalShortcut: values["no-local-shortcut"] ?? false,
+      });
       break;
 
     case "auth":
