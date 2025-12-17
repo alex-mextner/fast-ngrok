@@ -17,6 +17,7 @@ export type ServerMessage =
 // Client -> Server messages
 export type ClientMessage =
   | {
+      // Small text response - body inline
       type: "http_response";
       requestId: string;
       status: number;
@@ -24,22 +25,12 @@ export type ClientMessage =
       body: string;
     }
   | {
-      // Streaming response - start
-      type: "http_response_start";
+      // Binary response header - body follows as binary WebSocket frame
+      type: "http_response_binary";
       requestId: string;
       status: number;
       headers: Record<string, string>;
-    }
-  | {
-      // Streaming response - body chunk (base64 encoded)
-      type: "http_response_chunk";
-      requestId: string;
-      chunk: string; // base64
-    }
-  | {
-      // Streaming response - end
-      type: "http_response_end";
-      requestId: string;
+      bodySize: number;
     }
   | { type: "pong" };
 

@@ -6,12 +6,13 @@ interface PendingRequest {
   resolve: (response: TunnelResponse) => void;
   reject: (error: Error) => void;
   timeout: Timer;
-  // For streaming responses
-  streaming?: {
-    status: number;
-    headers: Record<string, string>;
-    chunks: Uint8Array[];
-  };
+}
+
+// Binary response waiting for body frame
+interface PendingBinaryHeader {
+  requestId: string;
+  status: number;
+  headers: Record<string, string>;
 }
 
 interface TunnelResponse {
@@ -31,6 +32,8 @@ interface ActiveTunnel {
   apiKey: string;
   createdAt: number;
   pendingRequests: Map<string, PendingRequest>;
+  // Header for next binary frame
+  pendingBinaryHeader: PendingBinaryHeader | null;
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
@@ -45,6 +48,7 @@ class TunnelManager {
       apiKey,
       createdAt: Date.now(),
       pendingRequests: new Map(),
+      pendingBinaryHeader: null,
     });
     console.log(`[tunnel] Registered: ${subdomain}`);
   }
@@ -139,7 +143,7 @@ class TunnelManager {
     if (!tunnel) return;
 
     if (message.type === "http_response") {
-      // Non-streaming response (small payloads)
+      // Small text response - body inline
       const pending = tunnel.pendingRequests.get(message.requestId);
       if (pending) {
         clearTimeout(pending.timeout);
@@ -153,56 +157,34 @@ class TunnelManager {
       return;
     }
 
-    if (message.type === "http_response_start") {
-      // Start streaming response
-      const pending = tunnel.pendingRequests.get(message.requestId);
-      if (pending) {
-        pending.streaming = {
-          status: message.status,
-          headers: message.headers,
-          chunks: [],
-        };
-      }
+    if (message.type === "http_response_binary") {
+      // Binary response header - store and wait for binary frame
+      tunnel.pendingBinaryHeader = {
+        requestId: message.requestId,
+        status: message.status,
+        headers: message.headers,
+      };
       return;
     }
+  }
 
-    if (message.type === "http_response_chunk") {
-      // Accumulate chunk
-      const pending = tunnel.pendingRequests.get(message.requestId);
-      if (pending?.streaming) {
-        const chunk = Uint8Array.from(atob(message.chunk), c => c.charCodeAt(0));
-        pending.streaming.chunks.push(chunk);
-      }
-      return;
-    }
+  // Handle binary WebSocket frame (body for http_response_binary)
+  handleBinaryMessage(subdomain: string, data: Uint8Array): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (!tunnel || !tunnel.pendingBinaryHeader) return;
 
-    if (message.type === "http_response_end") {
-      // Finish streaming response
-      const pending = tunnel.pendingRequests.get(message.requestId);
-      if (pending?.streaming) {
-        clearTimeout(pending.timeout);
-        tunnel.pendingRequests.delete(message.requestId);
+    const header = tunnel.pendingBinaryHeader;
+    tunnel.pendingBinaryHeader = null;
 
-        // Concatenate all chunks
-        const totalLength = pending.streaming.chunks.reduce((sum, c) => sum + c.length, 0);
-        const bodyBytes = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of pending.streaming.chunks) {
-          bodyBytes.set(chunk, offset);
-          offset += chunk.length;
-        }
-
-        // Keep as Uint8Array for binary data (compressed), decode for text
-        const contentEncoding = pending.streaming.headers["content-encoding"];
-        const body = contentEncoding ? bodyBytes : new TextDecoder().decode(bodyBytes);
-
-        pending.resolve({
-          status: pending.streaming.status,
-          headers: pending.streaming.headers,
-          body,
-        });
-      }
-      return;
+    const pending = tunnel.pendingRequests.get(header.requestId);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      tunnel.pendingRequests.delete(header.requestId);
+      pending.resolve({
+        status: header.status,
+        headers: header.headers,
+        body: data,
+      });
     }
   }
 

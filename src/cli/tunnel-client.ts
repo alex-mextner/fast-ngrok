@@ -114,10 +114,8 @@ export class TunnelClient {
     }
   }
 
-  // Threshold for streaming (64KB)
-  private static STREAM_THRESHOLD = 64 * 1024;
-  // Chunk size for streaming (32KB)
-  private static CHUNK_SIZE = 32 * 1024;
+  // Threshold for binary transfer (64KB)
+  private static BINARY_THRESHOLD = 64 * 1024;
   // Minimum size to compress (1KB)
   private static COMPRESS_THRESHOLD = 1024;
 
@@ -174,12 +172,12 @@ export class TunnelClient {
         }
       }
 
-      // Use streaming for: large responses OR compressed data (binary needs base64)
+      // Use binary for: large responses OR compressed data
       const isCompressed = !!responseHeaders["content-encoding"];
-      const needsStreaming = bodyBytes.length >= TunnelClient.STREAM_THRESHOLD || isCompressed;
+      const needsBinary = bodyBytes.length >= TunnelClient.BINARY_THRESHOLD || isCompressed;
 
-      if (!needsStreaming) {
-        // Small text response - send as single message
+      if (!needsBinary) {
+        // Small text response - body inline in JSON
         const clientMessage: ClientMessage = {
           type: "http_response",
           requestId: message.requestId,
@@ -189,8 +187,16 @@ export class TunnelClient {
         };
         this.ws.send(JSON.stringify(clientMessage));
       } else {
-        // Large or compressed response - stream with base64 encoding
-        await this.sendStreamingResponse(message.requestId, response.status, responseHeaders, bodyBytes);
+        // Large/binary response - JSON header + binary frame
+        const headerMessage: ClientMessage = {
+          type: "http_response_binary",
+          requestId: message.requestId,
+          status: response.status,
+          headers: responseHeaders,
+          bodySize: bodyBytes.length,
+        };
+        this.ws.send(JSON.stringify(headerMessage));
+        this.ws.send(bodyBytes);
       }
 
       // Duration includes everything: fetch + compress + send
@@ -243,52 +249,6 @@ export class TunnelClient {
     }
 
     return null;
-  }
-
-  private async sendStreamingResponse(
-    requestId: string,
-    status: number,
-    headers: Record<string, string>,
-    body: Uint8Array
-  ): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
-    }
-
-    // Send start message
-    const startMessage: ClientMessage = {
-      type: "http_response_start",
-      requestId,
-      status,
-      headers,
-    };
-    this.ws.send(JSON.stringify(startMessage));
-
-    // Send body in chunks
-    for (let offset = 0; offset < body.length; offset += TunnelClient.CHUNK_SIZE) {
-      const chunk = body.slice(offset, offset + TunnelClient.CHUNK_SIZE);
-      // Convert to base64
-      const base64 = btoa(String.fromCharCode(...chunk));
-
-      const chunkMessage: ClientMessage = {
-        type: "http_response_chunk",
-        requestId,
-        chunk: base64,
-      };
-      this.ws.send(JSON.stringify(chunkMessage));
-
-      // Small delay to avoid overwhelming the WebSocket buffer
-      if (offset + TunnelClient.CHUNK_SIZE < body.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1));
-      }
-    }
-
-    // Send end message
-    const endMessage: ClientMessage = {
-      type: "http_response_end",
-      requestId,
-    };
-    this.ws.send(JSON.stringify(endMessage));
   }
 
   private sendErrorResponse(requestId: string, startTime: number, error: unknown): void {

@@ -126,16 +126,23 @@ const server = Bun.serve<TunnelData>({
     },
 
     message(ws, message) {
+      const { subdomain } = ws.data;
+
+      // Binary frame = body for previous http_response_binary header
+      if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
+        const data = message instanceof ArrayBuffer ? new Uint8Array(message) : message;
+        tunnelManager.handleBinaryMessage(subdomain, data);
+        return;
+      }
+
+      // Text frame = JSON message
       try {
         const parsed = JSON.parse(message.toString()) as ClientMessage;
-        const { subdomain } = ws.data;
 
         if (parsed.type === "pong") {
-          // Heartbeat response - nothing to do
           return;
         }
 
-        // Handle all response types (regular and streaming)
         tunnelManager.handleResponse(subdomain, parsed);
       } catch (error) {
         console.error("[ws] Failed to parse message:", error);
