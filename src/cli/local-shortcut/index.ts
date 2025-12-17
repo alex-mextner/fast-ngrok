@@ -17,6 +17,7 @@ import { LocalServer } from "./local-server.ts";
 export interface LocalShortcutOptions {
   localPort: number;
   certPaths: CertPaths; // Pre-generated certs
+  hostsReady?: boolean; // true if hosts entry already added in preSetup
   onLocalRequest?: (method: string, path: string) => void;
 }
 
@@ -47,28 +48,25 @@ export class LocalShortcut {
     }
 
     try {
-      // 1. Add hosts entry (no sudo if already exists)
-      const wasAdded = await addHostsEntry(this.hostname);
-      if (wasAdded) {
-        console.log(`\n📝 Added ${this.hostname} to /etc/hosts`);
-      } else {
-        console.log(`\n✅ ${this.hostname} already in /etc/hosts`);
+      // 1. Add hosts entry if not already done in preSetup
+      if (!this.options.hostsReady) {
+        const wasAdded = await addHostsEntry(this.hostname);
+        if (wasAdded) {
+          console.log(`\n📝 Added ${this.hostname} to /etc/hosts`);
+        } else {
+          console.log(`\n✅ ${this.hostname} already in /etc/hosts`);
+        }
       }
 
       // 2. Start local HTTPS server
-      console.log("🔒 Starting local HTTPS server...");
       this.localServer = new LocalServer({
         localPort: this.options.localPort,
         certPaths: this.options.certPaths,
         onRequest: this.options.onLocalRequest,
       });
       await this.localServer.start();
-      console.log("✅ Local HTTPS server started");
 
       this.setupComplete = true;
-      console.log(
-        `\n✨ Local shortcut active - requests to ${this.hostname} go directly to localhost:${this.options.localPort}\n`
-      );
     } catch (error) {
       console.error(
         `\n⚠️  Local shortcut activation failed: ${error instanceof Error ? error.message : error}`
@@ -124,14 +122,21 @@ export function extractBaseDomainFromServerUrl(serverUrl: string): string {
   return url.hostname;
 }
 
+export interface PreSetupResult {
+  certPaths: CertPaths;
+  hostsReady: boolean; // true if hosts entry was added/exists
+  expectedHostname: string | null; // hostname if known from cache
+}
+
 /**
- * Pre-setup: install mkcert, CA, and generate certs
- * Should be called BEFORE connecting to server
- * Returns certPaths or null if setup failed
+ * Pre-setup: install mkcert, CA, generate certs, and add hosts entry if subdomain known
+ * Should be called BEFORE connecting to server and BEFORE TUI starts
+ * Returns result or null if setup failed
  */
 export async function preSetupLocalShortcut(
-  serverUrl: string
-): Promise<CertPaths | null> {
+  serverUrl: string,
+  cachedSubdomain?: string
+): Promise<PreSetupResult | null> {
   if (!LocalShortcut.isSupported()) {
     return null;
   }
@@ -145,9 +150,34 @@ export async function preSetupLocalShortcut(
 
     // 1. Ensure mkcert is ready and get cert paths
     const certPaths = await ensureMkcertReady(baseDomain);
+    console.log("✅ Certificates ready");
 
-    console.log("✅ Certificates ready\n");
-    return certPaths;
+    // 2. If we have cached subdomain, add hosts entry NOW (before TUI)
+    let hostsReady = false;
+    let expectedHostname: string | null = null;
+
+    if (cachedSubdomain) {
+      expectedHostname = `${cachedSubdomain}.${baseDomain}`;
+      console.log(`📝 Adding hosts entry for ${expectedHostname}...`);
+
+      try {
+        const wasAdded = await addHostsEntry(expectedHostname);
+        if (wasAdded) {
+          console.log(`✅ Added ${expectedHostname} to /etc/hosts`);
+        } else {
+          console.log(`✅ ${expectedHostname} already in /etc/hosts`);
+        }
+        hostsReady = true;
+      } catch (error) {
+        console.error(`⚠️  Failed to add hosts entry: ${error instanceof Error ? error.message : error}`);
+        console.error("   Local shortcut will work after manual hosts setup");
+      }
+    } else {
+      console.log("ℹ️  No cached subdomain - hosts entry will be added on next run");
+    }
+
+    console.log("");
+    return { certPaths, hostsReady, expectedHostname };
   } catch (error) {
     console.error(
       `\n⚠️  Local shortcut pre-setup failed: ${error instanceof Error ? error.message : error}`

@@ -6,6 +6,7 @@ import {
   LocalShortcut,
   shouldEnableLocalShortcut,
   preSetupLocalShortcut,
+  type PreSetupResult,
 } from "../local-shortcut/index.ts";
 
 async function isPortListening(port: number): Promise<boolean> {
@@ -85,19 +86,20 @@ export async function httpCommand(
     process.exit(1);
   }
 
+  // Use explicit subdomain, or cached subdomain for this port
+  const subdomain = options.subdomain ?? config.portSubdomains?.[port];
+
   const enableLocalShortcut = shouldEnableLocalShortcut(options.noLocalShortcut);
   let localShortcut: LocalShortcut | null = null;
 
   // Pre-setup local shortcut BEFORE TUI starts (may require sudo password)
-  let certPaths: Awaited<ReturnType<typeof preSetupLocalShortcut>> = null;
+  let preSetupResult: PreSetupResult | null = null;
   if (enableLocalShortcut) {
-    certPaths = await preSetupLocalShortcut(config.serverUrl);
+    // Pass cached subdomain so hosts entry can be added before TUI
+    preSetupResult = await preSetupLocalShortcut(config.serverUrl, subdomain);
   }
 
   const tui = new TUI(port);
-
-  // Use explicit subdomain, or cached subdomain for this port
-  const subdomain = options.subdomain ?? config.portSubdomains?.[port];
 
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
@@ -127,10 +129,11 @@ export async function httpCommand(
       await saveConfig(updatedConfig);
 
       // Activate local shortcut (certs already generated)
-      if (certPaths) {
+      if (preSetupResult) {
         localShortcut = new LocalShortcut({
           localPort: port,
-          certPaths,
+          certPaths: preSetupResult.certPaths,
+          hostsReady: preSetupResult.hostsReady,
         });
         const hostname = new URL(publicUrl).hostname;
         await localShortcut.activate(hostname);
