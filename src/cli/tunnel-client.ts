@@ -118,6 +118,8 @@ export class TunnelClient {
   private static STREAM_THRESHOLD = 64 * 1024;
   // Chunk size for streaming (32KB)
   private static CHUNK_SIZE = 32 * 1024;
+  // Minimum size to compress (1KB)
+  private static COMPRESS_THRESHOLD = 1024;
 
   private async handleRequest(message: Extract<ServerMessage, { type: "http_request" }>): Promise<void> {
     const startTime = Date.now();
@@ -137,14 +139,13 @@ export class TunnelClient {
         message.body
       );
 
-      const duration = Date.now() - startTime;
-
-      const headers: Record<string, string> = {};
+      const responseHeaders: Record<string, string> = {};
       response.headers.forEach((value, key) => {
-        headers[key] = value;
+        responseHeaders[key] = value;
       });
 
       if (this.ws?.readyState !== WebSocket.OPEN) {
+        const duration = Date.now() - startTime;
         console.error(`[ws] Cannot send response - WebSocket state: ${this.ws?.readyState}`);
         this.options.onResponse?.(message.requestId, 502, duration, true);
         return;
@@ -152,7 +153,26 @@ export class TunnelClient {
 
       // Get body as ArrayBuffer for proper binary handling
       const bodyBuffer = await response.arrayBuffer();
-      const bodyBytes = new Uint8Array(bodyBuffer);
+      let bodyBytes = new Uint8Array(bodyBuffer);
+
+      // Compress if beneficial (not already compressed, compressible type, large enough, not 304)
+      const contentEncoding = responseHeaders["content-encoding"];
+      const contentType = responseHeaders["content-type"] || "";
+      const acceptEncoding = message.headers["accept-encoding"] || "";
+
+      if (
+        response.status !== 304 &&
+        !contentEncoding &&
+        bodyBytes.length >= TunnelClient.COMPRESS_THRESHOLD &&
+        this.isCompressible(contentType)
+      ) {
+        const compressed = await this.compressBody(bodyBytes, acceptEncoding);
+        if (compressed) {
+          bodyBytes = compressed.data;
+          responseHeaders["content-encoding"] = compressed.encoding;
+          responseHeaders["content-length"] = String(bodyBytes.length);
+        }
+      }
 
       if (bodyBytes.length < TunnelClient.STREAM_THRESHOLD) {
         // Small response - send as single message
@@ -160,19 +180,65 @@ export class TunnelClient {
           type: "http_response",
           requestId: message.requestId,
           status: response.status,
-          headers,
+          headers: responseHeaders,
           body: new TextDecoder().decode(bodyBytes),
         };
         this.ws.send(JSON.stringify(clientMessage));
       } else {
         // Large response - stream in chunks
-        await this.sendStreamingResponse(message.requestId, response.status, headers, bodyBytes);
+        await this.sendStreamingResponse(message.requestId, response.status, responseHeaders, bodyBytes);
       }
 
+      // Duration includes everything: fetch + compress + send
+      const duration = Date.now() - startTime;
       this.options.onResponse?.(message.requestId, response.status, duration, false);
     } catch (error) {
       this.sendErrorResponse(message.requestId, startTime, error);
     }
+  }
+
+  private isCompressible(contentType: string): boolean {
+    const compressibleTypes = [
+      "text/",
+      "application/json",
+      "application/javascript",
+      "application/xml",
+      "application/xhtml",
+      "image/svg",
+    ];
+    return compressibleTypes.some((t) => contentType.includes(t));
+  }
+
+  private async compressBody(
+    data: Uint8Array<ArrayBuffer>,
+    acceptEncoding: string
+  ): Promise<{ data: Uint8Array<ArrayBuffer>; encoding: string } | null> {
+    // Prefer zstd (fastest), then br (best ratio), then gzip (universal)
+    try {
+      if (acceptEncoding.includes("zstd")) {
+        const compressed = Bun.zstdCompressSync(data, { level: 3 });
+        return { data: new Uint8Array(compressed) as Uint8Array<ArrayBuffer>, encoding: "zstd" };
+      }
+
+      if (acceptEncoding.includes("br")) {
+        // Use CompressionStream for brotli
+        const stream = new CompressionStream("brotli" as CompressionFormat);
+        const writer = stream.writable.getWriter();
+        writer.write(new Uint8Array(data.buffer.slice(0)));
+        writer.close();
+        const compressed = await new Response(stream.readable).arrayBuffer();
+        return { data: new Uint8Array(compressed), encoding: "br" };
+      }
+
+      if (acceptEncoding.includes("gzip")) {
+        const compressed = Bun.gzipSync(data, { level: 6 });
+        return { data: new Uint8Array(compressed) as Uint8Array<ArrayBuffer>, encoding: "gzip" };
+      }
+    } catch (e) {
+      console.error("[compress] Failed:", e);
+    }
+
+    return null;
   }
 
   private async sendStreamingResponse(
