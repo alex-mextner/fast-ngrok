@@ -33,6 +33,7 @@ const server = Bun.serve<TunnelData>({
 
       // Check for requested subdomain (for reconnects or custom subdomain)
       let subdomain = url.searchParams.get("subdomain");
+      console.log(`[tunnel] Connect request: subdomain=${subdomain || "(none)"}`);
 
       if (subdomain) {
         // Validate subdomain format (lowercase alphanumeric and hyphens)
