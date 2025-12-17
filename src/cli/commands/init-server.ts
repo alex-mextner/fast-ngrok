@@ -522,7 +522,7 @@ async function installCaddyWithPlugin(dnsProvider: string): Promise<void> {
     const goResult = await Bun.$`/usr/local/go/bin/go version`.nothrow().text();
     if (goResult.includes("go version")) {
       const match = goResult.match(/go(\d+)\.(\d+)/);
-      if (match) {
+      if (match && match[1] && match[2]) {
         const major = parseInt(match[1], 10);
         const minor = parseInt(match[2], 10);
         if (major >= 1 && minor >= 23) {

@@ -2,6 +2,21 @@ import { join } from "node:path";
 
 const DEFAULT_INSTALL_DIR = "/opt/fast-ngrok";
 
+interface EnvConfig {
+  baseDomain?: string;
+  tunnelPort?: string;
+  dnsProvider?: string;
+  dnsEnvVar?: string;
+}
+
+const DNS_PROVIDERS = [
+  { envVar: "CF_API_TOKEN", provider: "cloudflare" },
+  { envVar: "DO_AUTH_TOKEN", provider: "digitalocean" },
+  { envVar: "HETZNER_API_KEY", provider: "hetzner" },
+  { envVar: "VULTR_API_KEY", provider: "vultr" },
+  { envVar: "AWS_ACCESS_KEY_ID", provider: "route53" },
+];
+
 async function getBunGlobalBinDir(): Promise<string | null> {
   try {
     // Most reliable way - ask bun directly
@@ -12,16 +27,44 @@ async function getBunGlobalBinDir(): Promise<string | null> {
   }
 }
 
-export async function updateServiceCommand(): Promise<void> {
+async function loadEnvConfig(envPath: string): Promise<EnvConfig> {
+  const config: EnvConfig = {};
+  try {
+    const content = await Bun.file(envPath).text();
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIndex = trimmed.indexOf("=");
+      if (eqIndex === -1) continue;
+      const key = trimmed.slice(0, eqIndex).trim();
+      const value = trimmed.slice(eqIndex + 1).trim();
+
+      if (key === "BASE_DOMAIN") config.baseDomain = value;
+      if (key === "TUNNEL_PORT") config.tunnelPort = value;
+
+      // Detect DNS provider from env vars
+      const provider = DNS_PROVIDERS.find((p) => p.envVar === key);
+      if (provider && value) {
+        config.dnsProvider = provider.provider;
+        config.dnsEnvVar = provider.envVar;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return config;
+}
+
+export async function updateServerCommand(): Promise<void> {
   // Check if running as root
   const isRoot = process.getuid?.() === 0;
   if (!isRoot) {
     console.error("Error: This command requires root permissions.");
-    console.log("Run with: sudo fast-ngrok update-service");
+    console.log("Run with: sudo fast-ngrok update-server");
     process.exit(1);
   }
 
-  console.log("Updating fast-ngrok systemd service...\n");
+  console.log("Updating fast-ngrok server...\n");
 
   // Get bun's global bin directory
   const bunBinDir = await getBunGlobalBinDir();
@@ -119,7 +162,11 @@ WantedBy=multi-user.target
     await Bun.$`systemctl restart fast-ngrok`.quiet();
     console.log("✓ Restarted fast-ngrok service");
 
-    // Update Caddyfile symlink if exists
+    // Load env config and fix Caddyfile if needed
+    const envConfig = await loadEnvConfig(envPath);
+    await ensureValidCaddyfile(installDir, envConfig);
+
+    // Update Caddyfile symlink
     await updateCaddyfileSymlink(installDir);
 
     // Show status
@@ -130,6 +177,89 @@ WantedBy=multi-user.target
     console.error(`Error: ${error}`);
     process.exit(1);
   }
+}
+
+async function ensureValidCaddyfile(installDir: string, envConfig: EnvConfig): Promise<void> {
+  const caddyPath = join(installDir, "Caddyfile");
+
+  if (!envConfig.baseDomain) {
+    console.log("⚠ BASE_DOMAIN not found in .env, skipping Caddyfile check");
+    return;
+  }
+
+  const file = Bun.file(caddyPath);
+  const exists = await file.exists();
+  let needsRegeneration = false;
+
+  if (!exists) {
+    console.log("⚠ Caddyfile not found, generating...");
+    needsRegeneration = true;
+  } else {
+    // Check if Caddyfile has correct content (should contain the domain config)
+    const content = await file.text();
+    const expectedPattern = `*.${envConfig.baseDomain}`;
+
+    if (!content.includes(expectedPattern)) {
+      console.log("⚠ Caddyfile appears corrupted (missing domain config), regenerating...");
+      needsRegeneration = true;
+    }
+  }
+
+  if (needsRegeneration) {
+    const port = envConfig.tunnelPort || "3100";
+    const caddyfile = generateCaddyfile(envConfig.baseDomain, port, envConfig.dnsProvider, envConfig.dnsEnvVar);
+    await Bun.write(caddyPath, caddyfile);
+    console.log(`✓ Regenerated ${caddyPath}`);
+
+    // Restart Caddy to pick up new config
+    try {
+      await Bun.$`systemctl restart caddy`.quiet();
+      console.log("✓ Restarted Caddy");
+    } catch {
+      console.log("⚠ Could not restart Caddy");
+    }
+  } else {
+    console.log("✓ Caddyfile is valid");
+  }
+}
+
+function generateCaddyfile(domain: string, port: string, dnsProvider?: string, dnsEnvVar?: string): string {
+  let tlsBlock: string;
+
+  if (!dnsProvider || !dnsEnvVar) {
+    tlsBlock = `    # No DNS provider configured - using HTTP challenge
+    # For wildcard certs, configure DNS provider in .env`;
+  } else if (dnsProvider === "route53") {
+    tlsBlock = `    tls {
+        dns route53 {
+            access_key_id {env.AWS_ACCESS_KEY_ID}
+            secret_access_key {env.AWS_SECRET_ACCESS_KEY}
+            region {env.AWS_REGION}
+        }
+    }`;
+  } else {
+    tlsBlock = `    tls {
+        dns ${dnsProvider} {env.${dnsEnvVar}}
+    }`;
+  }
+
+  return `# Fast-ngrok tunnel server
+# Domain: ${domain}
+
+# Main domain for API
+${domain} {
+${tlsBlock}
+
+    reverse_proxy localhost:${port}
+}
+
+# Wildcard for tunnel subdomains
+*.${domain} {
+${tlsBlock}
+
+    reverse_proxy localhost:${port}
+}
+`;
 }
 
 async function updateCaddyfileSymlink(installDir: string): Promise<void> {
