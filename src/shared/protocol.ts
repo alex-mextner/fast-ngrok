@@ -23,6 +23,24 @@ export type ClientMessage =
       headers: Record<string, string>;
       body: string;
     }
+  | {
+      // Streaming response - start
+      type: "http_response_start";
+      requestId: string;
+      status: number;
+      headers: Record<string, string>;
+    }
+  | {
+      // Streaming response - body chunk (base64 encoded)
+      type: "http_response_chunk";
+      requestId: string;
+      chunk: string; // base64
+    }
+  | {
+      // Streaming response - end
+      type: "http_response_end";
+      requestId: string;
+    }
   | { type: "pong" };
 
 // Type guards

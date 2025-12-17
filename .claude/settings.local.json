@@ -17,7 +17,8 @@
       "Bash(ssh root@104.248.84.190 \"curl -v https://tunnel.mxtnr.ru/__tunnel__/health 2>&1 | head -30\")",
       "Bash(ssh root@104.248.84.190 \"cat /etc/systemd/system/caddy.service | grep -A5 Environment\")",
       "Bash(ssh root@104.248.84.190 \"journalctl -u caddy --since ''5 minutes ago'' 2>&1 | grep -i ''tunnel.mxtnr'' | tail -20\")",
-      "Bash(ssh root@104.248.84.190:*)"
+      "Bash(ssh root@104.248.84.190:*)",
+      "Bash(curl:*)"
     ]
   }
 }

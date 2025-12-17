@@ -6,6 +6,12 @@ interface PendingRequest {
   resolve: (response: TunnelResponse) => void;
   reject: (error: Error) => void;
   timeout: Timer;
+  // For streaming responses
+  streaming?: {
+    status: number;
+    headers: Record<string, string>;
+    chunks: Uint8Array[];
+  };
 }
 
 interface TunnelResponse {
@@ -125,19 +131,70 @@ class TunnelManager {
   }
 
   handleResponse(subdomain: string, message: ClientMessage): void {
-    if (message.type !== "http_response") return;
-
     const tunnel = this.tunnels.get(subdomain);
-    const pending = tunnel?.pendingRequests.get(message.requestId);
+    if (!tunnel) return;
 
-    if (pending) {
-      clearTimeout(pending.timeout);
-      tunnel!.pendingRequests.delete(message.requestId);
-      pending.resolve({
-        status: message.status,
-        headers: message.headers,
-        body: message.body,
-      });
+    if (message.type === "http_response") {
+      // Non-streaming response (small payloads)
+      const pending = tunnel.pendingRequests.get(message.requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        tunnel.pendingRequests.delete(message.requestId);
+        pending.resolve({
+          status: message.status,
+          headers: message.headers,
+          body: message.body,
+        });
+      }
+      return;
+    }
+
+    if (message.type === "http_response_start") {
+      // Start streaming response
+      const pending = tunnel.pendingRequests.get(message.requestId);
+      if (pending) {
+        pending.streaming = {
+          status: message.status,
+          headers: message.headers,
+          chunks: [],
+        };
+      }
+      return;
+    }
+
+    if (message.type === "http_response_chunk") {
+      // Accumulate chunk
+      const pending = tunnel.pendingRequests.get(message.requestId);
+      if (pending?.streaming) {
+        const chunk = Uint8Array.from(atob(message.chunk), c => c.charCodeAt(0));
+        pending.streaming.chunks.push(chunk);
+      }
+      return;
+    }
+
+    if (message.type === "http_response_end") {
+      // Finish streaming response
+      const pending = tunnel.pendingRequests.get(message.requestId);
+      if (pending?.streaming) {
+        clearTimeout(pending.timeout);
+        tunnel.pendingRequests.delete(message.requestId);
+
+        // Concatenate all chunks
+        const totalLength = pending.streaming.chunks.reduce((sum, c) => sum + c.length, 0);
+        const body = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of pending.streaming.chunks) {
+          body.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        pending.resolve({
+          status: pending.streaming.status,
+          headers: pending.streaming.headers,
+          body: new TextDecoder().decode(body),
+        });
+      }
+      return;
     }
   }
 

@@ -114,6 +114,11 @@ export class TunnelClient {
     }
   }
 
+  // Threshold for streaming (64KB)
+  private static STREAM_THRESHOLD = 64 * 1024;
+  // Chunk size for streaming (32KB)
+  private static CHUNK_SIZE = 32 * 1024;
+
   private async handleRequest(message: Extract<ServerMessage, { type: "http_request" }>): Promise<void> {
     const startTime = Date.now();
 
@@ -132,7 +137,6 @@ export class TunnelClient {
         message.body
       );
 
-      const responseBody = await response.text();
       const duration = Date.now() - startTime;
 
       const headers: Record<string, string> = {};
@@ -140,42 +144,96 @@ export class TunnelClient {
         headers[key] = value;
       });
 
-      const clientMessage: ClientMessage = {
-        type: "http_response",
-        requestId: message.requestId,
-        status: response.status,
-        headers,
-        body: responseBody,
-      };
+      if (this.ws?.readyState !== WebSocket.OPEN) {
+        console.error(`[ws] Cannot send response - WebSocket state: ${this.ws?.readyState}`);
+        this.options.onResponse?.(message.requestId, 502, duration, true);
+        return;
+      }
 
-      this.ws?.send(JSON.stringify(clientMessage));
+      // Get body as ArrayBuffer for proper binary handling
+      const bodyBuffer = await response.arrayBuffer();
+      const bodyBytes = new Uint8Array(bodyBuffer);
 
-      this.options.onResponse?.(
-        message.requestId,
-        response.status,
-        duration,
-        false
-      );
+      if (bodyBytes.length < TunnelClient.STREAM_THRESHOLD) {
+        // Small response - send as single message
+        const clientMessage: ClientMessage = {
+          type: "http_response",
+          requestId: message.requestId,
+          status: response.status,
+          headers,
+          body: new TextDecoder().decode(bodyBytes),
+        };
+        this.ws.send(JSON.stringify(clientMessage));
+      } else {
+        // Large response - stream in chunks
+        await this.sendStreamingResponse(message.requestId, response.status, headers, bodyBytes);
+      }
+
+      this.options.onResponse?.(message.requestId, response.status, duration, false);
     } catch (error) {
-      const duration = Date.now() - startTime;
-
-      const clientMessage: ClientMessage = {
-        type: "http_response",
-        requestId: message.requestId,
-        status: 502,
-        headers: { "content-type": "text/plain" },
-        body: `Bad Gateway: ${error instanceof Error ? error.message : "Unknown error"}`,
-      };
-
-      this.ws?.send(JSON.stringify(clientMessage));
-
-      this.options.onResponse?.(
-        message.requestId,
-        502,
-        duration,
-        true
-      );
+      this.sendErrorResponse(message.requestId, startTime, error);
     }
+  }
+
+  private async sendStreamingResponse(
+    requestId: string,
+    status: number,
+    headers: Record<string, string>,
+    body: Uint8Array
+  ): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket not connected");
+    }
+
+    // Send start message
+    const startMessage: ClientMessage = {
+      type: "http_response_start",
+      requestId,
+      status,
+      headers,
+    };
+    this.ws.send(JSON.stringify(startMessage));
+
+    // Send body in chunks
+    for (let offset = 0; offset < body.length; offset += TunnelClient.CHUNK_SIZE) {
+      const chunk = body.slice(offset, offset + TunnelClient.CHUNK_SIZE);
+      // Convert to base64
+      const base64 = btoa(String.fromCharCode(...chunk));
+
+      const chunkMessage: ClientMessage = {
+        type: "http_response_chunk",
+        requestId,
+        chunk: base64,
+      };
+      this.ws.send(JSON.stringify(chunkMessage));
+
+      // Small delay to avoid overwhelming the WebSocket buffer
+      if (offset + TunnelClient.CHUNK_SIZE < body.length) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    }
+
+    // Send end message
+    const endMessage: ClientMessage = {
+      type: "http_response_end",
+      requestId,
+    };
+    this.ws.send(JSON.stringify(endMessage));
+  }
+
+  private sendErrorResponse(requestId: string, startTime: number, error: unknown): void {
+    const duration = Date.now() - startTime;
+
+    const clientMessage: ClientMessage = {
+      type: "http_response",
+      requestId,
+      status: 502,
+      headers: { "content-type": "text/plain" },
+      body: `Bad Gateway: ${error instanceof Error ? error.message : "Unknown error"}`,
+    };
+
+    this.ws?.send(JSON.stringify(clientMessage));
+    this.options.onResponse?.(requestId, 502, duration, true);
   }
 
   private sendPong(): void {

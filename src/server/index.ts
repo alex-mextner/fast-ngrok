@@ -135,9 +135,8 @@ const server = Bun.serve<TunnelData>({
           return;
         }
 
-        if (parsed.type === "http_response") {
-          tunnelManager.handleResponse(subdomain, parsed);
-        }
+        // Handle all response types (regular and streaming)
+        tunnelManager.handleResponse(subdomain, parsed);
       } catch (error) {
         console.error("[ws] Failed to parse message:", error);
       }
