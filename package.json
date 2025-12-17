@@ -2,6 +2,14 @@
   "name": "fast-ngrok",
   "version": "0.2.16",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alex-mextner/fast-ngrok.git"
+  },
+  "homepage": "https://github.com/alex-mextner/fast-ngrok#readme",
+  "bugs": {
+    "url": "https://github.com/alex-mextner/fast-ngrok/issues"
+  },
   "bin": {
     "fast-ngrok": "./src/cli/index.ts"
   },
