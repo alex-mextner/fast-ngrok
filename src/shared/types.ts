@@ -7,11 +7,14 @@ export interface TunnelInfo {
   createdAt: number;
 }
 
+export type ConnectionType = 'ws' | 'sse' | 'http';
+
 export interface RequestInfo {
   id: string;
   method: string;
   path: string;
   startTime: number;
+  connectionType: ConnectionType;
   status?: number;
   duration?: number;
   error?: boolean;

@@ -5,6 +5,9 @@ interface RequestLog extends RequestInfo {
   status?: number;
   duration?: number;
   error?: boolean;
+  // Activity tracking for WS/SSE
+  lastIncoming?: number;
+  lastOutgoing?: number;
 }
 
 export class TUI {
@@ -136,6 +139,16 @@ export class TUI {
     }
   }
 
+  updateActivity(id: string, direction: 'in' | 'out'): void {
+    const req = this.requests.find((r) => r.id === id);
+    if (req) {
+      const now = Date.now();
+      if (direction === 'in') req.lastIncoming = now;
+      else req.lastOutgoing = now;
+      this.render();
+    }
+  }
+
   private getRequestListHeight(): number {
     if (!this.term) return 10;
     return Math.max(1, this.term.height - 7); // Header (4 lines) + Footer (2 lines) + border
@@ -209,8 +222,28 @@ export class TUI {
       }
 
       const method = req.method.padEnd(7);
-      const status = req.status ? String(req.status).padEnd(6) : "...   ";
-      const time = req.duration !== undefined ? `${req.duration}ms`.padEnd(8) : "...     ";
+      const isLongLived = req.connectionType === 'ws' || req.connectionType === 'sse';
+      const prefix = req.connectionType === 'ws' ? 'WS' : 'SSE';
+
+      // STATUS column
+      let status: string;
+      if (isLongLived) {
+        if (req.status) {
+          // Completed WS/SSE
+          status = req.error ? `${prefix}ERR` : `${prefix}END`;
+        } else {
+          // Active WS/SSE - show activity arrow
+          const arrow = this.getActivityArrow(req);
+          status = `${prefix} ${arrow}`;
+        }
+        status = status.padEnd(6);
+      } else {
+        status = req.status ? String(req.status).padEnd(6) : "...   ";
+      }
+
+      // TIME column - no time for WS/SSE
+      const time = isLongLived ? "      " : (req.duration !== undefined ? `${req.duration}ms`.padEnd(8) : "...     ");
+
       const maxPathLen = width - 25;
       const path = req.path.length > maxPathLen
         ? req.path.substring(0, maxPathLen - 3) + "..."
@@ -221,7 +254,7 @@ export class TUI {
       this.term(" ");
 
       // Status color
-      this.colorStatus(status, req.status);
+      this.colorStatus(status, req.status, isLongLived, req.error);
       this.term(" ");
 
       // Time
@@ -294,8 +327,26 @@ export class TUI {
     }
   }
 
-  private colorStatus(statusStr: string, status?: number): void {
+  private colorStatus(statusStr: string, status?: number, isLongLived?: boolean, error?: boolean): void {
     if (!this.term) return;
+
+    // WS/SSE connections
+    if (isLongLived) {
+      if (status) {
+        // Completed
+        if (error) {
+          this.term.red(statusStr);
+        } else {
+          this.term.green(statusStr);
+        }
+      } else {
+        // Active - magenta
+        this.term.magenta(statusStr);
+      }
+      return;
+    }
+
+    // Regular HTTP
     if (!status) {
       this.term.gray(statusStr);
       return;
@@ -310,6 +361,19 @@ export class TUI {
     } else {
       this.term.red(statusStr);
     }
+  }
+
+  private getActivityArrow(req: RequestLog): string {
+    const now = Date.now();
+    const ACTIVITY_WINDOW = 1000; // 1 second
+
+    const inActive = req.lastIncoming && (now - req.lastIncoming) < ACTIVITY_WINDOW;
+    const outActive = req.lastOutgoing && (now - req.lastOutgoing) < ACTIVITY_WINDOW;
+
+    if (inActive && outActive) return '↔';
+    if (inActive) return '→';
+    if (outActive) return '←';
+    return '·';
   }
 
   private calculateAvgTime(): number {

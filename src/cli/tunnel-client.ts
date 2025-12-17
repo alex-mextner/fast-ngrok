@@ -9,6 +9,7 @@ export interface TunnelClientOptions {
   subdomain?: string; // Custom subdomain (optional)
   onRequest?: (req: RequestInfo) => void;
   onResponse?: (id: string, status: number, duration: number, error?: boolean) => void;
+  onActivity?: (id: string, direction: 'in' | 'out') => void;
   onConnect?: (subdomain: string, publicUrl: string) => void;
   onDisconnect?: () => void;
   onError?: (message: string) => void;
@@ -123,13 +124,18 @@ export class TunnelClient {
 
   private async handleRequest(message: Extract<ServerMessage, { type: "http_request" }>): Promise<void> {
     const startTime = Date.now();
+    const connectionType = this.detectConnectionType(message.headers, message.path);
 
     this.options.onRequest?.({
       id: message.requestId,
       method: message.method,
       path: message.path,
       startTime,
+      connectionType,
     });
+
+    // Signal incoming data for WS/SSE activity indicator
+    this.options.onActivity?.(message.requestId, 'in');
 
     try {
       const response = await this.localProxy.forward(
@@ -183,6 +189,9 @@ export class TunnelClient {
       // Use binary for: large responses OR compressed data
       const isCompressed = !!responseHeaders["content-encoding"];
       const needsBinary = bodyBytes.length >= TunnelClient.BINARY_THRESHOLD || isCompressed;
+
+      // Signal outgoing data for WS/SSE activity indicator
+      this.options.onActivity?.(message.requestId, 'out');
 
       if (!needsBinary) {
         // Small text response - body inline in JSON
@@ -272,6 +281,16 @@ export class TunnelClient {
 
     this.ws?.send(JSON.stringify(clientMessage));
     this.options.onResponse?.(requestId, 502, duration, true);
+  }
+
+  private detectConnectionType(headers: Record<string, string>, path: string): 'ws' | 'sse' | 'http' {
+    const upgrade = headers['upgrade']?.toLowerCase();
+    const accept = headers['accept']?.toLowerCase();
+
+    if (upgrade === 'websocket') return 'ws';
+    if (accept?.includes('text/event-stream')) return 'sse';
+    if (path.includes('hmr') || path.includes('hot-update')) return 'ws';
+    return 'http';
   }
 
   private sendPong(): void {
