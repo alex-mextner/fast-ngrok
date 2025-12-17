@@ -163,3 +163,7 @@ Caddy Admin API must be enabled (default `localhost:2019`).
 - `Bun.file()` for file operations
 - `Bun.$` for shell commands
 - Auto-loads .env (no dotenv needed)
+
+## Deploy
+
+**НЕ деплоить автоматически!** Пользователь сам запустит `bun run deploy` когда нужно (требуется OTP для npm).
