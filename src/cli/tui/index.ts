@@ -26,24 +26,26 @@ export class TUI {
     this.term = terminalKit.terminal;
 
     // Register cleanup handlers
-    const restoreCursor = () => {
+    const cleanup = () => {
       if (this.term) {
         this.term.grabInput(false);
       }
-      process.stdout.write("\x1B[?25h"); // Show cursor via ANSI escape
+      // Exit alternate screen buffer and show cursor
+      process.stdout.write("\x1B[?1049l\x1B[?25h");
     };
 
-    process.on("exit", restoreCursor);
+    process.on("exit", cleanup);
     process.on("SIGINT", () => {
-      restoreCursor();
+      cleanup();
       process.exit(0);
     });
     process.on("SIGTERM", () => {
-      restoreCursor();
+      cleanup();
       process.exit(0);
     });
 
-    this.term.clear();
+    // Switch to alternate screen buffer (prevents flickering, restores terminal on exit)
+    process.stdout.write("\x1B[?1049h");
     this.term.hideCursor();
 
     // Handle terminal resize
@@ -85,10 +87,9 @@ export class TUI {
     }
     if (this.term) {
       this.term.grabInput(false);
-      this.term.clear();
-      this.term.moveTo(1, 1);
     }
-    process.stdout.write("\x1B[?25h"); // Show cursor via ANSI escape
+    // Exit alternate screen buffer and show cursor
+    process.stdout.write("\x1B[?1049l\x1B[?25h");
   }
 
   setConnected(_subdomain: string, publicUrl: string): void {
