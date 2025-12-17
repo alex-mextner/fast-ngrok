@@ -130,6 +130,14 @@ export async function httpCommand(
       tui.updateActivity(id, direction);
     },
 
+    onProgress: (id, bytesTransferred, totalBytes) => {
+      tui.updateProgress(id, bytesTransferred, totalBytes);
+    },
+
+    onRequestError: (id, message, duration) => {
+      tui.setRequestError(id, message, duration);
+    },
+
     onConnect: async (connectedSubdomain, publicUrl) => {
       tui.setConnected(connectedSubdomain, publicUrl);
 

@@ -15,10 +15,18 @@ interface PendingBinaryHeader {
   headers: Record<string, string>;
 }
 
+// Streaming response state
+interface ActiveStream {
+  requestId: string;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  // Waiting for next chunk's binary frame
+  pendingChunkSize: number | null;
+}
+
 interface TunnelResponse {
   status: number;
   headers: Record<string, string>;
-  body: Uint8Array | string;
+  body: Uint8Array | string | ReadableStream<Uint8Array>;
 }
 
 export interface TunnelData {
@@ -34,6 +42,8 @@ interface ActiveTunnel {
   pendingRequests: Map<string, PendingRequest>;
   // Header for next binary frame
   pendingBinaryHeader: PendingBinaryHeader | null;
+  // Active streams (streaming responses)
+  activeStreams: Map<string, ActiveStream>;
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
@@ -49,6 +59,7 @@ class TunnelManager {
       createdAt: Date.now(),
       pendingRequests: new Map(),
       pendingBinaryHeader: null,
+      activeStreams: new Map(),
     });
     console.log(`[tunnel] Registered: ${subdomain}`);
   }
@@ -60,6 +71,14 @@ class TunnelManager {
       for (const pending of tunnel.pendingRequests.values()) {
         clearTimeout(pending.timeout);
         pending.reject(new Error("Tunnel disconnected"));
+      }
+      // Close all active streams with error
+      for (const stream of tunnel.activeStreams.values()) {
+        try {
+          stream.controller.error(new Error("Tunnel disconnected"));
+        } catch {
+          // Stream may already be closed
+        }
       }
       this.tunnels.delete(subdomain);
       console.log(`[tunnel] Unregistered: ${subdomain}`);
@@ -108,7 +127,7 @@ class TunnelManager {
       body,
     };
 
-    return new Promise<Response>((resolve, reject) => {
+    return new Promise<Response>((resolve) => {
       const timeout = setTimeout(() => {
         tunnel.pendingRequests.delete(requestId);
         resolve(new Response("Gateway Timeout", { status: 504 }));
@@ -117,10 +136,16 @@ class TunnelManager {
       tunnel.pendingRequests.set(requestId, {
         requestId,
         resolve: (tunnelResponse) => {
-          // Body can be string (text) or Uint8Array (binary/compressed)
-          const body = tunnelResponse.body instanceof Uint8Array
-            ? tunnelResponse.body.buffer.slice(0) as ArrayBuffer
-            : tunnelResponse.body;
+          // Body can be: string (text), Uint8Array (binary), or ReadableStream (streaming)
+          let body: BodyInit;
+          if (tunnelResponse.body instanceof Uint8Array) {
+            body = tunnelResponse.body.buffer.slice(0) as ArrayBuffer;
+          } else if (tunnelResponse.body instanceof ReadableStream) {
+            // Streaming response - pass stream directly
+            body = tunnelResponse.body;
+          } else {
+            body = tunnelResponse.body;
+          }
           resolve(
             new Response(body, {
               status: tunnelResponse.status,
@@ -173,25 +198,113 @@ class TunnelManager {
       };
       return;
     }
+
+    if (message.type === "http_response_stream_start") {
+      // Start streaming response
+      const pending = tunnel.pendingRequests.get(message.requestId);
+      if (!pending) return;
+
+      // Clear the original timeout - streaming can take longer
+      clearTimeout(pending.timeout);
+
+      // Create ReadableStream for the response body
+      let streamController: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+        },
+      });
+
+      // Store stream state
+      tunnel.activeStreams.set(message.requestId, {
+        requestId: message.requestId,
+        controller: streamController!,
+        pendingChunkSize: null,
+      });
+
+      // Resolve with streaming response
+      tunnel.pendingRequests.delete(message.requestId);
+      pending.resolve({
+        status: message.status,
+        headers: message.headers,
+        body: stream as unknown as string, // Type hack - we handle ReadableStream specially
+      });
+      return;
+    }
+
+    if (message.type === "http_response_stream_chunk") {
+      // Chunk header - store size and wait for binary frame
+      const stream = tunnel.activeStreams.get(message.requestId);
+      if (stream) {
+        stream.pendingChunkSize = message.chunkSize;
+      }
+      return;
+    }
+
+    if (message.type === "http_response_stream_end") {
+      // End stream
+      const stream = tunnel.activeStreams.get(message.requestId);
+      if (stream) {
+        try {
+          stream.controller.close();
+        } catch {
+          // Stream may already be closed
+        }
+        tunnel.activeStreams.delete(message.requestId);
+      }
+      return;
+    }
+
+    if (message.type === "http_response_stream_error") {
+      // Stream error
+      const stream = tunnel.activeStreams.get(message.requestId);
+      if (stream) {
+        try {
+          stream.controller.error(new Error(message.error));
+        } catch {
+          // Stream may already be closed
+        }
+        tunnel.activeStreams.delete(message.requestId);
+      }
+      return;
+    }
   }
 
-  // Handle binary WebSocket frame (body for http_response_binary)
+  // Handle binary WebSocket frame (body for http_response_binary or stream chunk)
   handleBinaryMessage(subdomain: string, data: Uint8Array): void {
     const tunnel = this.tunnels.get(subdomain);
-    if (!tunnel || !tunnel.pendingBinaryHeader) return;
+    if (!tunnel) return;
 
-    const header = tunnel.pendingBinaryHeader;
-    tunnel.pendingBinaryHeader = null;
+    // Check for pending binary header (non-streaming)
+    if (tunnel.pendingBinaryHeader) {
+      const header = tunnel.pendingBinaryHeader;
+      tunnel.pendingBinaryHeader = null;
 
-    const pending = tunnel.pendingRequests.get(header.requestId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      tunnel.pendingRequests.delete(header.requestId);
-      pending.resolve({
-        status: header.status,
-        headers: header.headers,
-        body: data,
-      });
+      const pending = tunnel.pendingRequests.get(header.requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        tunnel.pendingRequests.delete(header.requestId);
+        pending.resolve({
+          status: header.status,
+          headers: header.headers,
+          body: data,
+        });
+      }
+      return;
+    }
+
+    // Check for active stream waiting for chunk data
+    for (const stream of tunnel.activeStreams.values()) {
+      if (stream.pendingChunkSize !== null) {
+        stream.pendingChunkSize = null;
+        try {
+          stream.controller.enqueue(data);
+        } catch {
+          // Stream may be closed by client
+          tunnel.activeStreams.delete(stream.requestId);
+        }
+        return;
+      }
     }
   }
 

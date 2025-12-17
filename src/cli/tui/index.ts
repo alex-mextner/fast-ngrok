@@ -5,9 +5,13 @@ interface RequestLog extends RequestInfo {
   status?: number;
   duration?: number;
   error?: boolean;
+  errorMessage?: string;
   // Activity tracking for WS/SSE
   lastIncoming?: number;
   lastOutgoing?: number;
+  // Streaming progress
+  bytesTransferred?: number;
+  totalBytes?: number;
 }
 
 export class TUI {
@@ -156,6 +160,25 @@ export class TUI {
     }
   }
 
+  updateProgress(id: string, bytesTransferred: number, totalBytes?: number): void {
+    const req = this.requests.find((r) => r.id === id);
+    if (req) {
+      req.bytesTransferred = bytesTransferred;
+      if (totalBytes !== undefined) req.totalBytes = totalBytes;
+      this.render();
+    }
+  }
+
+  setRequestError(id: string, message: string, duration: number): void {
+    const req = this.requests.find((r) => r.id === id);
+    if (req) {
+      req.error = true;
+      req.errorMessage = message;
+      req.duration = duration;
+      this.render();
+    }
+  }
+
   private getRequestListHeight(): number {
     if (!this.term) return 10;
     return Math.max(1, this.term.height - 7); // Header (4 lines) + Footer (2 lines) + border
@@ -241,24 +264,37 @@ export class TUI {
       const isLongLived = req.connectionType === 'ws' || req.connectionType === 'sse';
       const prefix = req.connectionType === 'ws' ? 'WS' : 'SSE';
 
-      // STATUS column
+      // STATUS column (6 chars wide)
       let status: string;
       if (isLongLived) {
         if (req.status) {
-          // Completed WS/SSE
-          status = req.error ? `${prefix}ERR` : `${prefix}END`;
+          // Completed WS/SSE: "WS END" or "WS ERR"
+          status = req.error ? `${prefix} ERR` : `${prefix} END`;
         } else {
-          // Active WS/SSE - show activity arrow
+          // Active WS/SSE - show activity arrow: "WS  →"
           const arrow = this.getActivityArrow(req);
-          status = `${prefix} ${arrow}`;
+          status = `${prefix}  ${arrow}`;
         }
         status = status.padEnd(6);
+      } else if (req.error) {
+        // Error - show ERR instead of status code
+        status = "ERR   ";
       } else {
         status = req.status ? String(req.status).padEnd(6) : "...   ";
       }
 
-      // TIME column - no time for WS/SSE
-      const time = isLongLived ? "      " : (req.duration !== undefined ? `${req.duration}ms`.padEnd(8) : "...     ");
+      // TIME column - show progress for streaming, no time for WS/SSE
+      let time: string;
+      if (isLongLived) {
+        time = "        ";
+      } else if (req.bytesTransferred !== undefined && req.status === undefined) {
+        // Streaming in progress - show transferred bytes
+        time = this.formatBytes(req.bytesTransferred, req.totalBytes).padEnd(8);
+      } else if (req.duration !== undefined) {
+        time = `${req.duration}ms`.padEnd(8);
+      } else {
+        time = "...     ";
+      }
 
       const maxPathLen = width - 25;
       const path = req.path.length > maxPathLen
@@ -362,6 +398,12 @@ export class TUI {
       return;
     }
 
+    // Error - always red
+    if (error) {
+      this.term.red(statusStr);
+      return;
+    }
+
     // Regular HTTP
     if (!status) {
       this.term.gray(statusStr);
@@ -398,5 +440,24 @@ export class TUI {
 
     const total = completed.reduce((sum, r) => sum + (r.duration || 0), 0);
     return Math.round(total / completed.length);
+  }
+
+  private formatBytes(bytes: number, total?: number): string {
+    const units = ["B", "K", "M", "G"];
+    let value = bytes;
+    let unitIdx = 0;
+    while (value >= 1024 && unitIdx < units.length - 1) {
+      value /= 1024;
+      unitIdx++;
+    }
+
+    const formatted = value < 10 ? value.toFixed(1) : Math.round(value);
+
+    if (total !== undefined) {
+      // Show percentage
+      const pct = Math.round((bytes / total) * 100);
+      return `${pct}%`;
+    }
+    return `${formatted}${units[unitIdx]}`;
   }
 }

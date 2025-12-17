@@ -32,6 +32,31 @@ export type ClientMessage =
       headers: Record<string, string>;
       bodySize: number;
     }
+  | {
+      // Stream start - headers and optional total size, chunks follow
+      type: "http_response_stream_start";
+      requestId: string;
+      status: number;
+      headers: Record<string, string>;
+      totalSize?: number; // If known from content-length
+    }
+  | {
+      // Stream chunk header - binary frame with chunk data follows
+      type: "http_response_stream_chunk";
+      requestId: string;
+      chunkSize: number;
+    }
+  | {
+      // Stream end
+      type: "http_response_stream_end";
+      requestId: string;
+    }
+  | {
+      // Stream error
+      type: "http_response_stream_error";
+      requestId: string;
+      error: string;
+    }
   | { type: "pong" };
 
 // Type guards

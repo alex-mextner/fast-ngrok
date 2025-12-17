@@ -10,6 +10,8 @@ export interface TunnelClientOptions {
   onRequest?: (req: RequestInfo) => void;
   onResponse?: (id: string, status: number, duration: number, error?: boolean) => void;
   onActivity?: (id: string, direction: 'in' | 'out') => void;
+  onProgress?: (id: string, bytesTransferred: number, totalBytes?: number) => void;
+  onRequestError?: (id: string, message: string, duration: number) => void;
   onConnect?: (subdomain: string, publicUrl: string) => void;
   onDisconnect?: () => void;
   onError?: (message: string) => void;
@@ -123,6 +125,8 @@ export class TunnelClient {
 
   // Threshold for binary transfer (64KB)
   private static BINARY_THRESHOLD = 64 * 1024;
+  // Threshold for streaming (256KB) - larger responses stream in chunks
+  private static STREAM_THRESHOLD = 256 * 1024;
   // Minimum size to compress (1KB)
   private static COMPRESS_THRESHOLD = 1024;
 
@@ -154,49 +158,153 @@ export class TunnelClient {
         responseHeaders[key] = value;
       });
 
-      // Remove encoding headers - fetch() auto-decompresses but may leave these
-      // We'll recompress if needed below
-      delete responseHeaders["content-encoding"];
-      delete responseHeaders["content-length"];
-      delete responseHeaders["transfer-encoding"];
+      // Check content-length to decide streaming vs buffering
+      const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
+      const shouldStream = contentLength > TunnelClient.STREAM_THRESHOLD;
+
+      // Remove encoding headers for buffered responses (we may recompress)
+      // For streaming, keep original encoding
+      if (!shouldStream) {
+        delete responseHeaders["content-encoding"];
+        delete responseHeaders["content-length"];
+        delete responseHeaders["transfer-encoding"];
+      }
 
       if (this.ws?.readyState !== WebSocket.OPEN) {
         const duration = Date.now() - startTime;
-        console.error(`[ws] Cannot send response - WebSocket state: ${this.ws?.readyState}`);
+        this.options.onRequestError?.(message.requestId, "WebSocket disconnected", duration);
         this.options.onResponse?.(message.requestId, 502, duration, true);
         return;
       }
 
-      // Get body as ArrayBuffer for proper binary handling
-      const bodyBuffer = await response.arrayBuffer();
-      let bodyBytes = new Uint8Array(bodyBuffer);
+      if (shouldStream) {
+        // Large response - stream it
+        await this.streamResponse(message.requestId, response, responseHeaders, contentLength, startTime);
+      } else {
+        // Small response - buffer and optionally compress
+        await this.sendBufferedResponse(message, response, responseHeaders, startTime);
+      }
+    } catch (error) {
+      this.sendErrorResponse(message.requestId, startTime, error);
+    }
+  }
 
-      // Compress if beneficial (not already compressed, compressible type, large enough, not 304)
-      const contentEncoding = responseHeaders["content-encoding"];
-      const contentType = responseHeaders["content-type"] || "";
-      const acceptEncoding = message.headers["accept-encoding"] || "";
+  private async streamResponse(
+    requestId: string,
+    response: Response,
+    headers: Record<string, string>,
+    totalSize: number,
+    startTime: number
+  ): Promise<void> {
+    // Send stream start
+    const startMsg: ClientMessage = {
+      type: "http_response_stream_start",
+      requestId,
+      status: response.status,
+      headers,
+      totalSize: totalSize || undefined,
+    };
+    this.ws!.send(JSON.stringify(startMsg));
 
-      if (
-        response.status !== 304 &&
-        !contentEncoding &&
-        bodyBytes.length >= TunnelClient.COMPRESS_THRESHOLD &&
-        this.isCompressible(contentType)
-      ) {
-        const compressed = await this.compressBody(bodyBytes, acceptEncoding);
-        if (compressed) {
-          bodyBytes = compressed.data;
-          responseHeaders["content-encoding"] = compressed.encoding;
-          responseHeaders["content-length"] = String(bodyBytes.length);
+    // Report initial progress
+    this.options.onProgress?.(requestId, 0, totalSize || undefined);
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      // No body - end stream immediately
+      const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
+      this.ws!.send(JSON.stringify(endMsg));
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
+      return;
+    }
+
+    let bytesTransferred = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+          throw new Error("WebSocket disconnected during streaming");
         }
+
+        // Send chunk header + binary data
+        const chunkMsg: ClientMessage = {
+          type: "http_response_stream_chunk",
+          requestId,
+          chunkSize: value.length,
+        };
+        this.ws.send(JSON.stringify(chunkMsg));
+        this.ws.send(value);
+
+        bytesTransferred += value.length;
+        this.options.onProgress?.(requestId, bytesTransferred, totalSize || undefined);
+        this.options.onActivity?.(requestId, 'out');
       }
 
-      // Use binary for: large responses OR compressed data
-      const isCompressed = !!responseHeaders["content-encoding"];
-      const needsBinary = bodyBytes.length >= TunnelClient.BINARY_THRESHOLD || isCompressed;
+      // Send stream end
+      const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
+      this.ws!.send(JSON.stringify(endMsg));
 
-      // Signal outgoing data for WS/SSE activity indicator
-      this.options.onActivity?.(message.requestId, 'out');
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
+    } catch (error) {
+      // Stream error
+      const errMsg = error instanceof Error ? error.message : "Stream error";
+      const errorMsgProto: ClientMessage = {
+        type: "http_response_stream_error",
+        requestId,
+        error: errMsg,
+      };
+      this.ws?.send(JSON.stringify(errorMsgProto));
 
+      const duration = Date.now() - startTime;
+      this.options.onRequestError?.(requestId, errMsg, duration);
+      this.options.onResponse?.(requestId, 502, duration, true);
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  private async sendBufferedResponse(
+    message: Extract<ServerMessage, { type: "http_request" }>,
+    response: Response,
+    responseHeaders: Record<string, string>,
+    startTime: number
+  ): Promise<void> {
+    // Get body as ArrayBuffer for proper binary handling
+    const bodyBuffer = await response.arrayBuffer();
+    let bodyBytes = new Uint8Array(bodyBuffer);
+
+    // Compress if beneficial (not already compressed, compressible type, large enough, not 304)
+    const contentEncoding = responseHeaders["content-encoding"];
+    const contentType = responseHeaders["content-type"] || "";
+    const acceptEncoding = message.headers["accept-encoding"] || "";
+
+    if (
+      response.status !== 304 &&
+      !contentEncoding &&
+      bodyBytes.length >= TunnelClient.COMPRESS_THRESHOLD &&
+      this.isCompressible(contentType)
+    ) {
+      const compressed = await this.compressBody(bodyBytes, acceptEncoding);
+      if (compressed) {
+        bodyBytes = compressed.data;
+        responseHeaders["content-encoding"] = compressed.encoding;
+        responseHeaders["content-length"] = String(bodyBytes.length);
+      }
+    }
+
+    // Use binary for: large responses OR compressed data
+    const isCompressed = !!responseHeaders["content-encoding"];
+    const needsBinary = bodyBytes.length >= TunnelClient.BINARY_THRESHOLD || isCompressed;
+
+    // Signal outgoing data for WS/SSE activity indicator
+    this.options.onActivity?.(message.requestId, 'out');
+
+    try {
       if (!needsBinary) {
         // Small text response - body inline in JSON
         const clientMessage: ClientMessage = {
@@ -206,7 +314,7 @@ export class TunnelClient {
           headers: responseHeaders,
           body: new TextDecoder().decode(bodyBytes),
         };
-        this.ws.send(JSON.stringify(clientMessage));
+        this.ws!.send(JSON.stringify(clientMessage));
       } else {
         // Large/binary response - JSON header + binary frame
         const headerMessage: ClientMessage = {
@@ -216,16 +324,21 @@ export class TunnelClient {
           headers: responseHeaders,
           bodySize: bodyBytes.length,
         };
-        this.ws.send(JSON.stringify(headerMessage));
-        this.ws.send(bodyBytes);
+        this.ws!.send(JSON.stringify(headerMessage));
+        this.ws!.send(bodyBytes);
       }
-
-      // Duration includes everything: fetch + compress + send
+    } catch (sendError) {
+      // WebSocket send failed (connection closed, buffer full, etc.)
       const duration = Date.now() - startTime;
-      this.options.onResponse?.(message.requestId, response.status, duration, false);
-    } catch (error) {
-      this.sendErrorResponse(message.requestId, startTime, error);
+      const errMsg = sendError instanceof Error ? sendError.message : "Send failed";
+      this.options.onRequestError?.(message.requestId, errMsg, duration);
+      this.options.onResponse?.(message.requestId, 502, duration, true);
+      return;
     }
+
+    // Duration includes everything: fetch + compress + send
+    const duration = Date.now() - startTime;
+    this.options.onResponse?.(message.requestId, response.status, duration, false);
   }
 
   private isCompressible(contentType: string): boolean {
