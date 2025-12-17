@@ -3,6 +3,24 @@ import type { RequestInfo } from "../../shared/types.ts";
 
 const term = terminalKit.terminal;
 
+// Ensure cursor is restored on any exit
+function restoreCursor(): void {
+  term.grabInput(false);
+  term.showCursor();
+  // Raw escape sequence as fallback
+  process.stdout.write("\x1B[?25h");
+}
+
+process.on("exit", restoreCursor);
+process.on("SIGINT", () => {
+  restoreCursor();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  restoreCursor();
+  process.exit(0);
+});
+
 interface RequestLog extends RequestInfo {
   status?: number;
   duration?: number;
@@ -63,8 +81,9 @@ export class TUI {
       clearInterval(this.renderInterval);
     }
     term.grabInput(false);
-    term.showCursor();
     term.clear();
+    term.moveTo(1, 1);
+    term.showCursor();
   }
 
   setConnected(subdomain: string, publicUrl: string): void {
