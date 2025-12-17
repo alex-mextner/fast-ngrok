@@ -456,11 +456,15 @@ async function setupCaddy(config: InitConfig): Promise<void> {
     await installCaddyWithPlugin(config.dnsProvider);
   }
 
-  // Create symlink for Caddyfile
+  // Add Caddyfile to /etc/caddy/Caddyfile.d/ (doesn't overwrite existing configs)
   const caddyPath = join(config.installDir, "Caddyfile");
   try {
-    await Bun.$`ln -sf ${caddyPath} /etc/caddy/Caddyfile`.quiet();
-    term.green(`  ✓ Linked Caddyfile to /etc/caddy/Caddyfile\n`);
+    await Bun.$`mkdir -p /etc/caddy/Caddyfile.d`.quiet();
+    await Bun.$`ln -sf ${caddyPath} /etc/caddy/Caddyfile.d/fast-ngrok`.quiet();
+    term.green(`  ✓ Linked Caddyfile to /etc/caddy/Caddyfile.d/fast-ngrok\n`);
+
+    // Add import directive to main Caddyfile if not present
+    await ensureCaddyfileImport();
   } catch {
     term.yellow(`  ⚠ Could not link Caddyfile\n`);
   }
@@ -471,6 +475,39 @@ async function setupCaddy(config: InitConfig): Promise<void> {
     await Bun.$`ln -sf ${envPath} /etc/caddy/.env`.quiet();
   } catch {
     // Ignore
+  }
+}
+
+async function ensureCaddyfileImport(): Promise<void> {
+  const mainCaddyfile = "/etc/caddy/Caddyfile";
+  const importLine = "import /etc/caddy/Caddyfile.d/*";
+
+  try {
+    const file = Bun.file(mainCaddyfile);
+    const exists = await file.exists();
+
+    if (!exists) {
+      // Create minimal Caddyfile with import
+      await Bun.write(mainCaddyfile, `# Caddy configuration\n${importLine}\n`);
+      term.green(`  ✓ Created ${mainCaddyfile} with import directive\n`);
+      return;
+    }
+
+    const content = await file.text();
+
+    // Check if import already exists
+    if (content.includes("import /etc/caddy/Caddyfile.d/")) {
+      term.gray(`  ✓ Import directive already present in Caddyfile\n`);
+      return;
+    }
+
+    // Add import at the end (after global options block if present)
+    const newContent = content.trimEnd() + `\n\n# Added by fast-ngrok\n${importLine}\n`;
+    await Bun.write(mainCaddyfile, newContent);
+    term.green(`  ✓ Added import directive to ${mainCaddyfile}\n`);
+  } catch (error) {
+    term.yellow(`  ⚠ Could not update ${mainCaddyfile}: ${error}\n`);
+    term.gray(`  Please add manually: ${importLine}\n`);
   }
 }
 
