@@ -31,7 +31,22 @@ const server = Bun.serve<TunnelData>({
         return new Response("Unauthorized", { status: 401 });
       }
 
-      const subdomain = generateSubdomain();
+      // Check for requested subdomain (for reconnects or custom subdomain)
+      let subdomain = url.searchParams.get("subdomain");
+
+      if (subdomain) {
+        // Validate subdomain format (lowercase alphanumeric and hyphens)
+        if (!/^[a-z0-9-]+$/.test(subdomain)) {
+          return new Response("Invalid subdomain format", { status: 400 });
+        }
+        // Check if subdomain is already in use by another connection
+        if (tunnelManager.has(subdomain)) {
+          return new Response("Subdomain already in use", { status: 409 });
+        }
+      } else {
+        subdomain = generateSubdomain();
+      }
+
       const upgraded = server.upgrade(req, {
         data: { subdomain, apiKey: apiKey! },
       });

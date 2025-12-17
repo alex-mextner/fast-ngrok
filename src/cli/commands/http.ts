@@ -32,6 +32,7 @@ async function isPortListening(port: number): Promise<boolean> {
 
 export interface HttpCommandOptions {
   noLocalShortcut: boolean;
+  subdomain?: string;
 }
 
 export async function httpCommand(
@@ -80,6 +81,7 @@ export async function httpCommand(
     serverUrl: config.serverUrl,
     apiKey: config.apiKey,
     localPort: port,
+    subdomain: options.subdomain,
 
     onRequest: (req) => {
       tui.addRequest(req);

@@ -15,6 +15,7 @@ Commands:
   http <port>   Start tunnel to local server (client)
 
 Options:
+  --subdomain <name>   Use custom subdomain (e.g., --subdomain my-app)
   --no-local-shortcut  Disable local shortcut (macOS only)
 
 Usage:
@@ -26,6 +27,9 @@ Usage:
 
   # 3. Start tunnel
   bunx fast-ngrok http 3000
+
+  # 4. With custom subdomain
+  bunx fast-ngrok http 3000 --subdomain my-app
 `;
 
 async function main() {
@@ -35,6 +39,7 @@ async function main() {
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
       "no-local-shortcut": { type: "boolean" },
+      subdomain: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -58,6 +63,7 @@ async function main() {
     case "http":
       await httpCommand(positionals.slice(1), {
         noLocalShortcut: values["no-local-shortcut"] ?? false,
+        subdomain: values.subdomain,
       });
       break;
 

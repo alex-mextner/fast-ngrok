@@ -6,6 +6,7 @@ export interface TunnelClientOptions {
   serverUrl: string;
   apiKey: string;
   localPort: number;
+  subdomain?: string; // Custom subdomain (optional)
   onRequest?: (req: RequestInfo) => void;
   onResponse?: (id: string, status: number, duration: number, error?: boolean) => void;
   onConnect?: (subdomain: string, publicUrl: string) => void;
@@ -20,9 +21,14 @@ export class TunnelClient {
   private maxReconnectAttempts = 10;
   private shouldReconnect = true;
   private pingInterval: Timer | null = null;
+  private currentSubdomain: string | null = null; // Preserve across reconnects
 
   constructor(private options: TunnelClientOptions) {
     this.localProxy = new LocalProxy(options.localPort);
+    // Use custom subdomain if provided
+    if (options.subdomain) {
+      this.currentSubdomain = options.subdomain;
+    }
   }
 
   async connect(): Promise<void> {
@@ -31,8 +37,14 @@ export class TunnelClient {
         .replace("https://", "wss://")
         .replace("http://", "ws://");
 
+      // Build URL with optional subdomain parameter
+      let connectUrl = `${wsUrl}/__tunnel__/connect`;
+      if (this.currentSubdomain) {
+        connectUrl += `?subdomain=${encodeURIComponent(this.currentSubdomain)}`;
+      }
+
       // Bun's WebSocket constructor accepts headers in second argument
-      this.ws = new WebSocket(`${wsUrl}/__tunnel__/connect`, {
+      this.ws = new WebSocket(connectUrl, {
         headers: {
           "x-api-key": this.options.apiKey,
         },
@@ -76,6 +88,8 @@ export class TunnelClient {
 
       switch (message.type) {
         case "connected":
+          // Save subdomain for reconnects
+          this.currentSubdomain = message.subdomain;
           this.options.onConnect?.(message.subdomain, message.publicUrl);
           break;
 
