@@ -8,9 +8,10 @@ export interface TunnelClientOptions {
   localPort: number;
   subdomain?: string; // Custom subdomain (optional)
   onRequest?: (req: RequestInfo) => void;
-  // duration = estimated end-to-end time (based on serverTimestamp)
-  // localDuration = time spent on CLI side (local fetch + compress)
-  onResponse?: (id: string, status: number, duration: number, localDuration: number, error?: boolean) => void;
+  // duration = time spent on CLI side (local fetch + compress + send)
+  onResponse?: (id: string, status: number, duration: number, error?: boolean) => void;
+  // Real end-to-end duration measured on server (arrives after onResponse)
+  onTiming?: (id: string, duration: number) => void;
   onActivity?: (id: string, direction: 'in' | 'out') => void;
   onProgress?: (id: string, bytesTransferred: number, totalBytes?: number) => void;
   onRequestError?: (id: string, message: string, duration: number) => void;
@@ -112,6 +113,11 @@ export class TunnelClient {
           await this.handleRequest(message);
           break;
 
+        case "request_timing":
+          // Server sends real end-to-end duration after response completes
+          this.options.onTiming?.(message.requestId, message.duration);
+          break;
+
         case "ping":
           this.sendPong();
           break;
@@ -135,15 +141,14 @@ export class TunnelClient {
   private static COMPRESS_THRESHOLD = 1024;
 
   private async handleRequest(message: Extract<ServerMessage, { type: "http_request" }>): Promise<void> {
-    const localStartTime = Date.now();
-    const serverStartTime = message.serverTimestamp;
+    const startTime = Date.now();
     const connectionType = this.detectConnectionType(message.headers, message.path);
 
     this.options.onRequest?.({
       id: message.requestId,
       method: message.method,
       path: message.path,
-      startTime: localStartTime,
+      startTime,
       connectionType,
     });
 
@@ -186,19 +191,18 @@ export class TunnelClient {
       }
 
       if (this.ws?.readyState !== WebSocket.OPEN) {
-        const localDuration = Date.now() - localStartTime;
-        const duration = Date.now() - serverStartTime;
-        this.options.onRequestError?.(message.requestId, "WebSocket disconnected", localDuration);
-        this.options.onResponse?.(message.requestId, 502, duration, localDuration, true);
+        const duration = Date.now() - startTime;
+        this.options.onRequestError?.(message.requestId, "WebSocket disconnected", duration);
+        this.options.onResponse?.(message.requestId, 502, duration, true);
         return;
       }
 
       if (isSmall) {
         // Small response - buffer and optionally compress
-        await this.sendBufferedResponse(message, response, responseHeaders, localStartTime, serverStartTime);
+        await this.sendBufferedResponse(message, response, responseHeaders, startTime);
       } else if (isLarge) {
         // Very large response - stream without buffering (original behavior)
-        await this.streamResponse(message.requestId, response, responseHeaders, contentLength, localStartTime, serverStartTime);
+        await this.streamResponse(message.requestId, response, responseHeaders, contentLength, startTime);
       } else {
         // Medium response (256KB-10MB) - buffer, compress, then stream
         await this.sendCompressedStream(
@@ -208,12 +212,11 @@ export class TunnelClient {
           contentType,
           acceptEncoding,
           contentEncoding,
-          localStartTime,
-          serverStartTime
+          startTime
         );
       }
     } catch (error) {
-      this.sendErrorResponse(message.requestId, localStartTime, serverStartTime, error);
+      this.sendErrorResponse(message.requestId, startTime, error);
     }
   }
 
@@ -222,8 +225,7 @@ export class TunnelClient {
     response: Response,
     headers: Record<string, string>,
     totalSize: number,
-    localStartTime: number,
-    serverStartTime: number
+    startTime: number
   ): Promise<void> {
     // Send stream start
     const startMsg: ClientMessage = {
@@ -243,9 +245,8 @@ export class TunnelClient {
       // No body - end stream immediately
       const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
       this.ws!.send(JSON.stringify(endMsg));
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
-      this.options.onResponse?.(requestId, response.status, duration, localDuration, false);
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
       return;
     }
 
@@ -278,9 +279,8 @@ export class TunnelClient {
       const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
       this.ws!.send(JSON.stringify(endMsg));
 
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
-      this.options.onResponse?.(requestId, response.status, duration, localDuration, false);
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
     } catch (error) {
       // Stream error
       const errMsg = error instanceof Error ? error.message : "Stream error";
@@ -291,10 +291,9 @@ export class TunnelClient {
       };
       this.ws?.send(JSON.stringify(errorMsgProto));
 
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
-      this.options.onRequestError?.(requestId, errMsg, localDuration);
-      this.options.onResponse?.(requestId, 502, duration, localDuration, true);
+      const duration = Date.now() - startTime;
+      this.options.onRequestError?.(requestId, errMsg, duration);
+      this.options.onResponse?.(requestId, 502, duration, true);
     } finally {
       reader.releaseLock();
     }
@@ -308,8 +307,7 @@ export class TunnelClient {
     contentType: string,
     acceptEncoding: string,
     _existingEncoding: string | null, // Unused: Bun fetch auto-decompresses
-    localStartTime: number,
-    serverStartTime: number
+    startTime: number
   ): Promise<void> {
     // Buffer entire response
     const bodyBuffer = await response.arrayBuffer();
@@ -370,9 +368,8 @@ export class TunnelClient {
       const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
       this.ws!.send(JSON.stringify(endMsg));
 
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
-      this.options.onResponse?.(requestId, response.status, duration, localDuration, false);
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Stream error";
       const errorMsgProto: ClientMessage = {
@@ -382,10 +379,9 @@ export class TunnelClient {
       };
       this.ws?.send(JSON.stringify(errorMsgProto));
 
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
-      this.options.onRequestError?.(requestId, errMsg, localDuration);
-      this.options.onResponse?.(requestId, 502, duration, localDuration, true);
+      const duration = Date.now() - startTime;
+      this.options.onRequestError?.(requestId, errMsg, duration);
+      this.options.onResponse?.(requestId, 502, duration, true);
     }
   }
 
@@ -393,8 +389,7 @@ export class TunnelClient {
     message: Extract<ServerMessage, { type: "http_request" }>,
     response: Response,
     responseHeaders: Record<string, string>,
-    localStartTime: number,
-    serverStartTime: number
+    startTime: number
   ): Promise<void> {
     // Get body as ArrayBuffer for proper binary handling
     const bodyBuffer = await response.arrayBuffer();
@@ -451,18 +446,16 @@ export class TunnelClient {
       }
     } catch (sendError) {
       // WebSocket send failed (connection closed, buffer full, etc.)
-      const localDuration = Date.now() - localStartTime;
-      const duration = Date.now() - serverStartTime;
+      const duration = Date.now() - startTime;
       const errMsg = sendError instanceof Error ? sendError.message : "Send failed";
-      this.options.onRequestError?.(message.requestId, errMsg, localDuration);
-      this.options.onResponse?.(message.requestId, 502, duration, localDuration, true);
+      this.options.onRequestError?.(message.requestId, errMsg, duration);
+      this.options.onResponse?.(message.requestId, 502, duration, true);
       return;
     }
 
     // Duration includes everything: fetch + compress + send
-    const localDuration = Date.now() - localStartTime;
-    const duration = Date.now() - serverStartTime;
-    this.options.onResponse?.(message.requestId, response.status, duration, localDuration, false);
+    const duration = Date.now() - startTime;
+    this.options.onResponse?.(message.requestId, response.status, duration, false);
   }
 
   private isCompressible(contentType: string): boolean {
@@ -509,9 +502,8 @@ export class TunnelClient {
     return null;
   }
 
-  private sendErrorResponse(requestId: string, localStartTime: number, serverStartTime: number, error: unknown): void {
-    const localDuration = Date.now() - localStartTime;
-    const duration = Date.now() - serverStartTime;
+  private sendErrorResponse(requestId: string, startTime: number, error: unknown): void {
+    const duration = Date.now() - startTime;
 
     const clientMessage: ClientMessage = {
       type: "http_response",
@@ -522,7 +514,7 @@ export class TunnelClient {
     };
 
     this.ws?.send(JSON.stringify(clientMessage));
-    this.options.onResponse?.(requestId, 502, duration, localDuration, true);
+    this.options.onResponse?.(requestId, 502, duration, true);
   }
 
   private detectConnectionType(headers: Record<string, string>, path: string): 'ws' | 'sse' | 'http' {

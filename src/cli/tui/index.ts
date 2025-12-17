@@ -3,8 +3,7 @@ import type { RequestInfo } from "../../shared/types.ts";
 
 interface RequestLog extends RequestInfo {
   status?: number;
-  duration?: number; // End-to-end time (from serverTimestamp)
-  localDuration?: number; // CLI-side time (local fetch + compress)
+  duration?: number; // CLI-side time (local fetch + compress + send)
   error?: boolean;
   errorMessage?: string;
   isLocal?: boolean; // Request went through local shortcut (bypassed tunnel)
@@ -152,7 +151,6 @@ export class TUI {
       connectionType: "http",
       status: 200,
       duration: 0,
-      localDuration: 0,
       isLocal: true,
     });
 
@@ -164,12 +162,11 @@ export class TUI {
     this.render();
   }
 
-  updateRequest(id: string, status: number, duration: number, localDuration: number, error?: boolean): void {
+  updateRequest(id: string, status: number, duration: number, error?: boolean): void {
     const req = this.requests.find((r) => r.id === id);
     if (req) {
       req.status = status;
       req.duration = duration;
-      req.localDuration = localDuration;
       req.error = error;
       this.render();
     }
@@ -190,6 +187,15 @@ export class TUI {
     if (req) {
       req.bytesTransferred = bytesTransferred;
       if (totalBytes !== undefined) req.totalBytes = totalBytes;
+      this.render();
+    }
+  }
+
+  // Update with real end-to-end duration from server
+  updateTiming(id: string, duration: number): void {
+    const req = this.requests.find((r) => r.id === id);
+    if (req) {
+      req.duration = duration;
       this.render();
     }
   }

@@ -122,8 +122,12 @@ export async function httpCommand(
       tui.addRequest(req);
     },
 
-    onResponse: (id, status, duration, localDuration, error) => {
-      tui.updateRequest(id, status, duration, localDuration, error);
+    onResponse: (id, status, duration, error) => {
+      tui.updateRequest(id, status, duration, error);
+    },
+
+    onTiming: (id, duration) => {
+      tui.updateTiming(id, duration);
     },
 
     onActivity: (id, direction) => {

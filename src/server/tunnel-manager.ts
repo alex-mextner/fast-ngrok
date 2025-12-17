@@ -3,6 +3,7 @@ import type { ServerMessage, ClientMessage } from "../shared/protocol.ts";
 
 interface PendingRequest {
   requestId: string;
+  startTime: number; // Date.now() when server received HTTP request
   resolve: (response: TunnelResponse) => void;
   reject: (error: Error) => void;
   timeout: Timer;
@@ -133,6 +134,9 @@ class TunnelManager {
       headers[key] = value;
     });
 
+    // Track start time for accurate duration measurement
+    const startTime = Date.now();
+
     // Send request to CLI
     const message: ServerMessage = {
       type: "http_request",
@@ -141,7 +145,6 @@ class TunnelManager {
       path: url.pathname + url.search,
       headers,
       body,
-      serverTimestamp: Date.now(),
     };
 
     return new Promise<Response>((resolve) => {
@@ -152,6 +155,7 @@ class TunnelManager {
 
       tunnel.pendingRequests.set(requestId, {
         requestId,
+        startTime,
         resolve: (tunnelResponse) => {
           // Body can be: string (text), Uint8Array (binary), or ReadableStream (streaming)
           let body: BodyInit;
@@ -163,6 +167,18 @@ class TunnelManager {
           } else {
             body = tunnelResponse.body;
           }
+
+          // Calculate real duration and send to CLI
+          const duration = Date.now() - startTime;
+          const timingMsg: ServerMessage = {
+            type: "request_timing",
+            requestId,
+            duration,
+          };
+          if (tunnel.ws.readyState === 1) {
+            tunnel.ws.send(JSON.stringify(timingMsg));
+          }
+
           resolve(
             new Response(body, {
               status: tunnelResponse.status,

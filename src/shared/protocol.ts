@@ -10,7 +10,12 @@ export type ServerMessage =
       path: string;
       headers: Record<string, string>;
       body?: string;
-      serverTimestamp: number; // Date.now() when server received request
+    }
+  | {
+      // Sent after server completes HTTP response to browser
+      type: "request_timing";
+      requestId: string;
+      duration: number; // Real end-to-end time measured on server
     }
   | { type: "ping" }
   | { type: "error"; message: string };
