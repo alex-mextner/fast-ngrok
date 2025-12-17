@@ -174,8 +174,12 @@ export class TunnelClient {
         }
       }
 
-      if (bodyBytes.length < TunnelClient.STREAM_THRESHOLD) {
-        // Small response - send as single message
+      // Use streaming for: large responses OR compressed data (binary needs base64)
+      const isCompressed = !!responseHeaders["content-encoding"];
+      const needsStreaming = bodyBytes.length >= TunnelClient.STREAM_THRESHOLD || isCompressed;
+
+      if (!needsStreaming) {
+        // Small text response - send as single message
         const clientMessage: ClientMessage = {
           type: "http_response",
           requestId: message.requestId,
@@ -185,7 +189,7 @@ export class TunnelClient {
         };
         this.ws.send(JSON.stringify(clientMessage));
       } else {
-        // Large response - stream in chunks
+        // Large or compressed response - stream with base64 encoding
         await this.sendStreamingResponse(message.requestId, response.status, responseHeaders, bodyBytes);
       }
 

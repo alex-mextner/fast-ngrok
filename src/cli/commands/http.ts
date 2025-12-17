@@ -1,5 +1,5 @@
 import { connect, type Socket } from "node:net";
-import { getConfig } from "../config.ts";
+import { getConfig, saveConfig } from "../config.ts";
 import { TunnelClient } from "../tunnel-client.ts";
 import { TUI } from "../tui/index.ts";
 import {
@@ -96,11 +96,14 @@ export async function httpCommand(
 
   const tui = new TUI(port);
 
+  // Use explicit subdomain, or cached subdomain for this port
+  const subdomain = options.subdomain ?? config.portSubdomains?.[port];
+
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
     apiKey: config.apiKey,
     localPort: port,
-    subdomain: options.subdomain,
+    subdomain,
 
     onRequest: (req) => {
       tui.addRequest(req);
@@ -110,8 +113,18 @@ export async function httpCommand(
       tui.updateRequest(id, status, duration, error);
     },
 
-    onConnect: async (subdomain, publicUrl) => {
-      tui.setConnected(subdomain, publicUrl);
+    onConnect: async (connectedSubdomain, publicUrl) => {
+      tui.setConnected(connectedSubdomain, publicUrl);
+
+      // Cache subdomain for this port
+      const updatedConfig = {
+        ...config,
+        portSubdomains: {
+          ...config.portSubdomains,
+          [port]: connectedSubdomain,
+        },
+      };
+      await saveConfig(updatedConfig);
 
       // Activate local shortcut (certs already generated)
       if (certPaths) {

@@ -20,6 +20,8 @@ export interface RequestInfo {
 export interface Config {
   serverUrl: string;
   apiKey: string;
+  // Cached subdomains per local port
+  portSubdomains?: Record<number, string>;
 }
 
 export interface ServerConfig {

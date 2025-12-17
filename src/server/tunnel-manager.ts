@@ -17,7 +17,7 @@ interface PendingRequest {
 interface TunnelResponse {
   status: number;
   headers: Record<string, string>;
-  body: string;
+  body: Uint8Array | string;
 }
 
 export interface TunnelData {
@@ -113,8 +113,12 @@ class TunnelManager {
       tunnel.pendingRequests.set(requestId, {
         requestId,
         resolve: (tunnelResponse) => {
+          // Body can be string (text) or Uint8Array (binary/compressed)
+          const body = tunnelResponse.body instanceof Uint8Array
+            ? tunnelResponse.body.buffer.slice(0) as ArrayBuffer
+            : tunnelResponse.body;
           resolve(
-            new Response(tunnelResponse.body, {
+            new Response(body, {
               status: tunnelResponse.status,
               headers: tunnelResponse.headers,
             })
@@ -181,17 +185,21 @@ class TunnelManager {
 
         // Concatenate all chunks
         const totalLength = pending.streaming.chunks.reduce((sum, c) => sum + c.length, 0);
-        const body = new Uint8Array(totalLength);
+        const bodyBytes = new Uint8Array(totalLength);
         let offset = 0;
         for (const chunk of pending.streaming.chunks) {
-          body.set(chunk, offset);
+          bodyBytes.set(chunk, offset);
           offset += chunk.length;
         }
+
+        // Keep as Uint8Array for binary data (compressed), decode for text
+        const contentEncoding = pending.streaming.headers["content-encoding"];
+        const body = contentEncoding ? bodyBytes : new TextDecoder().decode(bodyBytes);
 
         pending.resolve({
           status: pending.streaming.status,
           headers: pending.streaming.headers,
-          body: new TextDecoder().decode(body),
+          body,
         });
       }
       return;
