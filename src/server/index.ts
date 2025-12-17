@@ -23,6 +23,7 @@ if (!caddyAvailable) {
 
 Bun.serve<TunnelData>({
   port: config.tunnelPort,
+  idleTimeout: 120, // 2 minutes for slow requests (compilation, large files, etc.)
 
   async fetch(req, server) {
     const url = new URL(req.url);
