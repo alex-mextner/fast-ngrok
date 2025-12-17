@@ -29,9 +29,8 @@ export class TUI {
     const restoreCursor = () => {
       if (this.term) {
         this.term.grabInput(false);
-        this.term.showCursor();
       }
-      process.stdout.write("\x1B[?25h");
+      process.stdout.write("\x1B[?25h"); // Show cursor via ANSI escape
     };
 
     process.on("exit", restoreCursor);
@@ -88,8 +87,8 @@ export class TUI {
       this.term.grabInput(false);
       this.term.clear();
       this.term.moveTo(1, 1);
-      this.term.showCursor();
     }
+    process.stdout.write("\x1B[?25h"); // Show cursor via ANSI escape
   }
 
   setConnected(_subdomain: string, publicUrl: string): void {
