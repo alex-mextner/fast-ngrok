@@ -30,9 +30,16 @@ export async function httpCommand(
     process.exit(1);
   }
 
-  const tui = new TUI(port);
   const enableLocalShortcut = shouldEnableLocalShortcut(options.noLocalShortcut);
   let localShortcut: LocalShortcut | null = null;
+
+  // Pre-setup local shortcut BEFORE TUI starts (may require sudo password)
+  let certPaths: Awaited<ReturnType<typeof preSetupLocalShortcut>> = null;
+  if (enableLocalShortcut) {
+    certPaths = await preSetupLocalShortcut(config.serverUrl);
+  }
+
+  const tui = new TUI(port);
 
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
@@ -50,17 +57,14 @@ export async function httpCommand(
     onConnect: async (subdomain, publicUrl) => {
       tui.setConnected(subdomain, publicUrl);
 
-      // Setup local shortcut AFTER successful server auth
-      if (enableLocalShortcut) {
-        const certPaths = await preSetupLocalShortcut(config.serverUrl);
-        if (certPaths) {
-          localShortcut = new LocalShortcut({
-            localPort: port,
-            certPaths,
-          });
-          const hostname = new URL(publicUrl).hostname;
-          await localShortcut.activate(hostname);
-        }
+      // Activate local shortcut (certs already generated)
+      if (certPaths) {
+        localShortcut = new LocalShortcut({
+          localPort: port,
+          certPaths,
+        });
+        const hostname = new URL(publicUrl).hostname;
+        await localShortcut.activate(hostname);
       }
     },
 
