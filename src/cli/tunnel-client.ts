@@ -144,6 +144,12 @@ export class TunnelClient {
         responseHeaders[key] = value;
       });
 
+      // Remove encoding headers - fetch() auto-decompresses but may leave these
+      // We'll recompress if needed below
+      delete responseHeaders["content-encoding"];
+      delete responseHeaders["content-length"];
+      delete responseHeaders["transfer-encoding"];
+
       if (this.ws?.readyState !== WebSocket.OPEN) {
         const duration = Date.now() - startTime;
         console.error(`[ws] Cannot send response - WebSocket state: ${this.ws?.readyState}`);
