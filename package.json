@@ -1,29 +1,30 @@
 {
-  "name": "fast-ngrok",
-  "version": "0.2.30",
-  "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/alex-mextner/fast-ngrok.git"
-  },
-  "homepage": "https://github.com/alex-mextner/fast-ngrok#readme",
-  "bugs": {
-    "url": "https://github.com/alex-mextner/fast-ngrok/issues"
-  },
-  "bin": {
-    "fast-ngrok": "./src/cli/index.ts"
-  },
-  "scripts": {
-    "server": "bun run src/server/index.ts",
-    "dev": "bun --hot src/server/index.ts"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "terminal-kit": "^3.1.2"
-  }
+	"name": "fast-ngrok",
+	"version": "0.2.30",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/alex-mextner/fast-ngrok.git"
+	},
+	"homepage": "https://github.com/alex-mextner/fast-ngrok#readme",
+	"bugs": {
+		"url": "https://github.com/alex-mextner/fast-ngrok/issues"
+	},
+	"bin": {
+		"fast-ngrok": "./src/cli/index.ts"
+	},
+	"scripts": {
+		"server": "bun run src/server/index.ts",
+		"dev": "bun --hot src/server/index.ts",
+		"deploy": "npm version patch && npm publish && git push && bun update --global fast-ngrok && fast-ngrok --version && ssh root@104.248.84.190 '/root/.bun/bin/bun update --global fast-ngrok && export PATH=\"/root/.bun/bin:$PATH\" && /root/.bun/bin/fast-ngrok update-service'"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"terminal-kit": "^3.1.2"
+	}
 }
