@@ -1,24 +1,17 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(bun run:*)",
-      "Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
-      "Bash(bun:*)",
-      "Bash(timeout 2 bun run:*)",
-      "Bash(npm version:*)",
-      "Bash(npm publish)",
-      "Bash(git push)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(echo:*)",
-      "Bash(ssh root@104.248.84.190 \"cat /etc/caddy/Caddyfile\")",
-      "Bash(ssh root@104.248.84.190 \"ls -la /etc/caddy/Caddyfile.d/ && echo ''---'' && cat /etc/caddy/Caddyfile.d/*\")",
-      "Bash(ssh root@104.248.84.190 \"curl -s http://localhost:3100/__tunnel__/health && echo ''---'' && systemctl status caddy --no-pager | head -20\")",
-      "Bash(ssh root@104.248.84.190 \"curl -v https://tunnel.mxtnr.ru/__tunnel__/health 2>&1 | head -30\")",
-      "Bash(ssh root@104.248.84.190 \"cat /etc/systemd/system/caddy.service | grep -A5 Environment\")",
-      "Bash(ssh root@104.248.84.190 \"journalctl -u caddy --since ''5 minutes ago'' 2>&1 | grep -i ''tunnel.mxtnr'' | tail -20\")",
-      "Bash(ssh root@104.248.84.190:*)",
-      "Bash(curl:*)"
-    ]
-  }
+	"permissions": {
+		"allow": [
+			"Bash(bun run:*)",
+			"Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
+			"Bash(bun:*)",
+			"Bash(timeout 2 bun run:*)",
+			"Bash(git push)",
+			"Bash(git add:*)",
+			"Bash(git commit:*)",
+			"Bash(curl:*)",
+			"Bash(echo:*)",
+			"Bash(ssh root@104.248.84.190 \"cat /etc/caddy/Caddyfile\")",
+			"Bash(ssh root@104.248.84.190:*)"
+		]
+	}
 }
