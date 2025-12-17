@@ -10,9 +10,12 @@ Simple single-user ngrok alternative with WebSocket tunneling and Caddy integrat
 - Caddy integration for automatic route management
 - Pre-shared API key authentication
 
-| 1. Server setup | 2. Client setup |
-| --------------- | --------------- |
-| <img width="700" alt="Screenshot 2025-12-16 at 19 29 26" src="https://github.com/user-attachments/assets/6bbdfc9f-ed64-49c0-958f-e266833a4397" /> | <img width="450" alt="image" src="https://github.com/user-attachments/assets/f93e58a9-7dbe-4bfa-a1b2-2cccaf5a3dd2" /> <img width="450" alt="image" src="https://github.com/user-attachments/assets/9eccf752-0804-4937-83dc-3bec1298a38b" /> |
+### 1. Server setup
+<img width="450" alt="Screenshot 2025-12-16 at 19 29 26" src="https://github.com/user-attachments/assets/6bbdfc9f-ed64-49c0-958f-e266833a4397" /> 
+
+### 2. Client setup
+<img width="450" alt="image" src="https://github.com/user-attachments/assets/f93e58a9-7dbe-4bfa-a1b2-2cccaf5a3dd2" /><br/>
+<img width="450" alt="image" src="https://github.com/user-attachments/assets/9eccf752-0804-4937-83dc-3bec1298a38b" /> 
 
 
 ## Installation
