@@ -44,14 +44,25 @@ interface ActiveTunnel {
   pendingBinaryHeader: PendingBinaryHeader | null;
   // Active streams (streaming responses)
   activeStreams: Map<string, ActiveStream>;
+  // Ping interval timer
+  pingInterval: Timer | null;
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
+const PING_INTERVAL = 20000; // 20 seconds - keep connection alive
 
 class TunnelManager {
   private tunnels = new Map<string, ActiveTunnel>();
 
   register(subdomain: string, ws: ServerWebSocket<TunnelData>, apiKey: string): void {
+    // Start ping interval to keep WebSocket alive
+    const pingInterval = setInterval(() => {
+      const tunnel = this.tunnels.get(subdomain);
+      if (tunnel && tunnel.ws.readyState === 1) { // WebSocket.OPEN
+        tunnel.ws.ping(); // Native WebSocket ping
+      }
+    }, PING_INTERVAL);
+
     this.tunnels.set(subdomain, {
       ws,
       subdomain,
@@ -60,6 +71,7 @@ class TunnelManager {
       pendingRequests: new Map(),
       pendingBinaryHeader: null,
       activeStreams: new Map(),
+      pingInterval,
     });
     console.log(`[tunnel] Registered: ${subdomain}`);
   }
@@ -67,6 +79,10 @@ class TunnelManager {
   unregister(subdomain: string): void {
     const tunnel = this.tunnels.get(subdomain);
     if (tunnel) {
+      // Stop ping interval
+      if (tunnel.pingInterval) {
+        clearInterval(tunnel.pingInterval);
+      }
       // Reject all pending requests
       for (const pending of tunnel.pendingRequests.values()) {
         clearTimeout(pending.timeout);
