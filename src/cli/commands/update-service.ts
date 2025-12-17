@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 const DEFAULT_INSTALL_DIR = "/opt/fast-ngrok";
 
 async function getBunGlobalBinDir(): Promise<string | null> {
@@ -117,6 +119,9 @@ WantedBy=multi-user.target
     await Bun.$`systemctl restart fast-ngrok`.quiet();
     console.log("✓ Restarted fast-ngrok service");
 
+    // Update Caddyfile symlink if exists
+    await updateCaddyfileSymlink(installDir);
+
     // Show status
     console.log("\nService status:");
     const status = await Bun.$`systemctl status fast-ngrok --no-pager -l`.nothrow().text();
@@ -124,5 +129,55 @@ WantedBy=multi-user.target
   } catch (error) {
     console.error(`Error: ${error}`);
     process.exit(1);
+  }
+}
+
+async function updateCaddyfileSymlink(installDir: string): Promise<void> {
+  const caddyPath = join(installDir, "Caddyfile");
+
+  // Check if local Caddyfile exists
+  if (!(await Bun.file(caddyPath).exists())) {
+    return;
+  }
+
+  try {
+    await Bun.$`mkdir -p /etc/caddy/Caddyfile.d`.quiet();
+    await Bun.$`ln -sf ${caddyPath} /etc/caddy/Caddyfile.d/fast-ngrok`.quiet();
+    console.log("✓ Linked Caddyfile to /etc/caddy/Caddyfile.d/fast-ngrok");
+
+    // Add import directive to main Caddyfile if not present
+    await ensureCaddyfileImport();
+  } catch {
+    console.log("⚠ Could not update Caddyfile symlink");
+  }
+}
+
+async function ensureCaddyfileImport(): Promise<void> {
+  const mainCaddyfile = "/etc/caddy/Caddyfile";
+  const importLine = "import /etc/caddy/Caddyfile.d/*";
+
+  try {
+    const file = Bun.file(mainCaddyfile);
+    const exists = await file.exists();
+
+    if (!exists) {
+      await Bun.write(mainCaddyfile, `# Caddy configuration\n${importLine}\n`);
+      console.log(`✓ Created ${mainCaddyfile} with import directive`);
+      return;
+    }
+
+    const content = await file.text();
+
+    if (content.includes("import /etc/caddy/Caddyfile.d/")) {
+      console.log("✓ Import directive already present in Caddyfile");
+      return;
+    }
+
+    const newContent = `${content.trimEnd()}\n\n# Added by fast-ngrok\n${importLine}\n`;
+    await Bun.write(mainCaddyfile, newContent);
+    console.log(`✓ Added import directive to ${mainCaddyfile}`);
+  } catch (error) {
+    console.log(`⚠ Could not update ${mainCaddyfile}: ${error}`);
+    console.log(`  Please add manually: ${importLine}`);
   }
 }
