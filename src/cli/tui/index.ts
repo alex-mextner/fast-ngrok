@@ -1,26 +1,6 @@
 import terminalKit from "terminal-kit";
 import type { RequestInfo } from "../../shared/types.ts";
 
-const term = terminalKit.terminal;
-
-// Ensure cursor is restored on any exit
-function restoreCursor(): void {
-  term.grabInput(false);
-  term.showCursor();
-  // Raw escape sequence as fallback
-  process.stdout.write("\x1B[?25h");
-}
-
-process.on("exit", restoreCursor);
-process.on("SIGINT", () => {
-  restoreCursor();
-  process.exit(0);
-});
-process.on("SIGTERM", () => {
-  restoreCursor();
-  process.exit(0);
-});
-
 interface RequestLog extends RequestInfo {
   status?: number;
   duration?: number;
@@ -29,28 +9,52 @@ interface RequestLog extends RequestInfo {
 
 export class TUI {
   private requests: RequestLog[] = [];
-  private subdomain: string | null = null;
   private publicUrl: string | null = null;
   private connected = false;
   private errorMessage: string | null = null;
   private maxRequests = 100;
   private scrollOffset = 0;
   private renderInterval: Timer | null = null;
+  // Lazy-initialized terminal - only created when start() is called
+  // This prevents terminal capture during module import (before sudo prompts, etc.)
+  private term: terminalKit.Terminal | null = null;
 
   constructor(private localPort: number) {}
 
   start(): void {
-    term.clear();
-    term.hideCursor();
+    // Initialize terminal only when TUI actually starts
+    this.term = terminalKit.terminal;
+
+    // Register cleanup handlers
+    const restoreCursor = () => {
+      if (this.term) {
+        this.term.grabInput(false);
+        this.term.showCursor();
+      }
+      process.stdout.write("\x1B[?25h");
+    };
+
+    process.on("exit", restoreCursor);
+    process.on("SIGINT", () => {
+      restoreCursor();
+      process.exit(0);
+    });
+    process.on("SIGTERM", () => {
+      restoreCursor();
+      process.exit(0);
+    });
+
+    this.term.clear();
+    this.term.hideCursor();
 
     // Handle terminal resize
-    term.on("resize", () => {
+    this.term.on("resize", () => {
       this.render();
     });
 
     // Handle keyboard input
-    term.grabInput({ mouse: false });
-    term.on("key", (key: string) => {
+    this.term.grabInput({ mouse: false });
+    this.term.on("key", (key: string) => {
       if (key === "CTRL_C" || key === "q") {
         this.destroy();
         process.exit(0);
@@ -80,14 +84,15 @@ export class TUI {
     if (this.renderInterval) {
       clearInterval(this.renderInterval);
     }
-    term.grabInput(false);
-    term.clear();
-    term.moveTo(1, 1);
-    term.showCursor();
+    if (this.term) {
+      this.term.grabInput(false);
+      this.term.clear();
+      this.term.moveTo(1, 1);
+      this.term.showCursor();
+    }
   }
 
-  setConnected(subdomain: string, publicUrl: string): void {
-    this.subdomain = subdomain;
+  setConnected(_subdomain: string, publicUrl: string): void {
     this.publicUrl = publicUrl;
     this.connected = true;
     this.errorMessage = null;
@@ -129,53 +134,56 @@ export class TUI {
   }
 
   private getRequestListHeight(): number {
-    return Math.max(1, term.height - 7); // Header (4 lines) + Footer (2 lines) + border
+    if (!this.term) return 10;
+    return Math.max(1, this.term.height - 7); // Header (4 lines) + Footer (2 lines) + border
   }
 
   private render(): void {
-    term.clear();
+    if (!this.term) return;
 
-    const width = term.width;
+    this.term.clear();
+
+    const width = this.term.width;
 
     // === Header ===
-    term.moveTo(1, 1);
-    term.bold.cyan("fast-ngrok");
+    this.term.moveTo(1, 1);
+    this.term.bold.cyan("fast-ngrok");
 
     // Status indicator
     const statusText = this.connected ? " [Connected] " : " [Disconnected] ";
-    term.moveTo(width - statusText.length, 1);
+    this.term.moveTo(width - statusText.length, 1);
     if (this.connected) {
-      term.bgGreen.black(statusText);
+      this.term.bgGreen.black(statusText);
     } else {
-      term.bgRed.white(statusText);
+      this.term.bgRed.white(statusText);
     }
 
     // URL info
-    term.moveTo(1, 2);
+    this.term.moveTo(1, 2);
     if (this.publicUrl) {
-      term.white("Forwarding: ");
-      term.green(this.publicUrl);
-      term.moveTo(1, 3);
-      term.white("         -> ");
-      term.yellow(`http://localhost:${this.localPort}`);
+      this.term.white("Forwarding: ");
+      this.term.green(this.publicUrl);
+      this.term.moveTo(1, 3);
+      this.term.white("         -> ");
+      this.term.yellow(`http://localhost:${this.localPort}`);
     } else {
-      term.gray("Connecting...");
+      this.term.gray("Connecting...");
     }
 
     // Error message
     if (this.errorMessage) {
-      term.moveTo(1, 3);
-      term.red(`Error: ${this.errorMessage}`);
+      this.term.moveTo(1, 3);
+      this.term.red(`Error: ${this.errorMessage}`);
     }
 
     // Separator
-    term.moveTo(1, 4);
-    term.gray("─".repeat(width));
+    this.term.moveTo(1, 4);
+    this.term.gray("─".repeat(width));
 
     // === Request list header ===
-    term.moveTo(1, 5);
-    term.bold.white(
-      this.formatRow("METHOD", "STATUS", "TIME", "PATH", width)
+    this.term.moveTo(1, 5);
+    this.term.bold.white(
+      this.formatRow("METHOD", "STATUS", "TIME", "PATH")
     );
 
     // === Request list ===
@@ -187,11 +195,11 @@ export class TUI {
 
     for (let i = 0; i < listHeight; i++) {
       const y = 6 + i;
-      term.moveTo(1, y);
+      this.term.moveTo(1, y);
 
       const req = visibleRequests[i];
       if (!req) {
-        term.eraseLine();
+        this.term.eraseLine();
         continue;
       }
 
@@ -205,96 +213,97 @@ export class TUI {
 
       // Method color
       this.colorMethod(method);
-      term(" ");
+      this.term(" ");
 
       // Status color
       this.colorStatus(status, req.status);
-      term(" ");
+      this.term(" ");
 
       // Time
-      term.yellow(time);
-      term(" ");
+      this.term.yellow(time);
+      this.term(" ");
 
       // Path
-      term.white(path);
+      this.term.white(path);
     }
 
     // === Footer ===
-    const footerY = term.height - 1;
+    const footerY = this.term.height - 1;
 
     // Separator
-    term.moveTo(1, footerY - 1);
-    term.gray("─".repeat(width));
+    this.term.moveTo(1, footerY - 1);
+    this.term.gray("─".repeat(width));
 
     // Stats
-    term.moveTo(1, footerY);
+    this.term.moveTo(1, footerY);
     const total = this.requests.length;
     const success = this.requests.filter((r) => r.status && r.status < 400).length;
     const clientErr = this.requests.filter((r) => r.status && r.status >= 400 && r.status < 500).length;
     const serverErr = this.requests.filter((r) => r.status && r.status >= 500).length;
     const avgTime = this.calculateAvgTime();
 
-    term.white(`Requests: ${total}`);
-    term.gray(" | ");
-    term.green(`2xx: ${success}`);
-    term.gray(" | ");
-    term.yellow(`4xx: ${clientErr}`);
-    term.gray(" | ");
-    term.red(`5xx: ${serverErr}`);
-    term.gray(" | ");
-    term.cyan(`Avg: ${avgTime}ms`);
+    this.term.white(`Requests: ${total}`);
+    this.term.gray(" | ");
+    this.term.green(`2xx: ${success}`);
+    this.term.gray(" | ");
+    this.term.yellow(`4xx: ${clientErr}`);
+    this.term.gray(" | ");
+    this.term.red(`5xx: ${serverErr}`);
+    this.term.gray(" | ");
+    this.term.cyan(`Avg: ${avgTime}ms`);
 
     // Help
     const helpText = "q: quit | ↑↓: scroll";
-    term.moveTo(width - helpText.length, footerY);
-    term.gray(helpText);
+    this.term.moveTo(width - helpText.length, footerY);
+    this.term.gray(helpText);
   }
 
   private formatRow(
     method: string,
     status: string,
     time: string,
-    path: string,
-    width: number
+    path: string
   ): string {
     return `${method.padEnd(7)} ${status.padEnd(6)} ${time.padEnd(8)} ${path}`;
   }
 
   private colorMethod(method: string): void {
+    if (!this.term) return;
     const m = method.trim();
     switch (m) {
       case "GET":
-        term.cyan(method);
+        this.term.cyan(method);
         break;
       case "POST":
-        term.green(method);
+        this.term.green(method);
         break;
       case "PUT":
       case "PATCH":
-        term.yellow(method);
+        this.term.yellow(method);
         break;
       case "DELETE":
-        term.red(method);
+        this.term.red(method);
         break;
       default:
-        term.white(method);
+        this.term.white(method);
     }
   }
 
   private colorStatus(statusStr: string, status?: number): void {
+    if (!this.term) return;
     if (!status) {
-      term.gray(statusStr);
+      this.term.gray(statusStr);
       return;
     }
 
     if (status < 300) {
-      term.green(statusStr);
+      this.term.green(statusStr);
     } else if (status < 400) {
-      term.cyan(statusStr);
+      this.term.cyan(statusStr);
     } else if (status < 500) {
-      term.yellow(statusStr);
+      this.term.yellow(statusStr);
     } else {
-      term.red(statusStr);
+      this.term.red(statusStr);
     }
   }
 
