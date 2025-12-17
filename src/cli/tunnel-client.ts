@@ -135,8 +135,8 @@ export class TunnelClient {
   private static BINARY_THRESHOLD = 64 * 1024;
   // Threshold for streaming (256KB) - larger responses stream in chunks
   private static STREAM_THRESHOLD = 256 * 1024;
-  // Threshold for large files (10MB) - above this, stream without buffering
-  private static LARGE_FILE_THRESHOLD = 10 * 1024 * 1024;
+  // Threshold for large files (100MB) - above this, stream without buffering/compression
+  private static LARGE_FILE_THRESHOLD = 100 * 1024 * 1024;
   // Minimum size to compress (1KB)
   private static COMPRESS_THRESHOLD = 1024;
 
@@ -173,6 +173,19 @@ export class TunnelClient {
       const contentEncoding = response.headers.get("content-encoding");
       const contentType = responseHeaders["content-type"] || "";
       const acceptEncoding = message.headers["accept-encoding"] || "";
+
+      // Debug: log compression and caching info for large files
+      if (contentLength > 50000) {
+        console.log(`[DEBUG] ${message.method} ${message.path}`);
+        console.log(`  status: ${response.status}`);
+        console.log(`  content-length: ${contentLength}`);
+        console.log(`  content-type: ${contentType}`);
+        console.log(`  content-encoding from local: ${contentEncoding}`);
+        console.log(`  accept-encoding from browser: ${acceptEncoding}`);
+        console.log(`  if-none-match from browser: ${message.headers["if-none-match"] || "(none)"}`);
+        console.log(`  etag from local: ${response.headers.get("etag") || "(none)"}`);
+        console.log(`  compressible: ${this.isCompressible(contentType)}`);
+      }
 
       // Determine response handling mode:
       // - Small (<=256KB): buffer + compress + send
@@ -318,9 +331,14 @@ export class TunnelClient {
     if (response.status !== 304 && this.isCompressible(contentType)) {
       const compressed = await this.compressBody(bodyBytes, acceptEncoding);
       if (compressed) {
+        console.log(`[DEBUG] Compressed ${bodyBytes.length} -> ${compressed.data.length} (${compressed.encoding})`);
         bodyBytes = compressed.data;
         headers["content-encoding"] = compressed.encoding;
+      } else {
+        console.log(`[DEBUG] Compression failed or not supported for acceptEncoding: ${acceptEncoding}`);
       }
+    } else {
+      console.log(`[DEBUG] Skipping compression: status=${response.status}, compressible=${this.isCompressible(contentType)}`);
     }
 
     // Update content-length to actual size
