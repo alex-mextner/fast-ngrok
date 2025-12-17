@@ -15,9 +15,8 @@ export class LocalProxy {
     const forwardHeaders = { ...headers };
     delete forwardHeaders["host"];
     delete forwardHeaders["x-tunnel-subdomain"];
-    // Remove accept-encoding - we handle compression ourselves
-    // Otherwise fetch auto-decompresses but may leave content-encoding header
-    delete forwardHeaders["accept-encoding"];
+    // Keep accept-encoding - let local app decide on compression
+    // This preserves ETag behavior (Vary: Accept-Encoding)
 
     try {
       return await fetch(localUrl, {

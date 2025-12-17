@@ -141,6 +141,7 @@ class TunnelManager {
       path: url.pathname + url.search,
       headers,
       body,
+      serverTimestamp: Date.now(),
     };
 
     return new Promise<Response>((resolve) => {

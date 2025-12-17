@@ -3,9 +3,11 @@ import type { RequestInfo } from "../../shared/types.ts";
 
 interface RequestLog extends RequestInfo {
   status?: number;
-  duration?: number;
+  duration?: number; // End-to-end time (from serverTimestamp)
+  localDuration?: number; // CLI-side time (local fetch + compress)
   error?: boolean;
   errorMessage?: string;
+  isLocal?: boolean; // Request went through local shortcut (bypassed tunnel)
   // Activity tracking for WS/SSE
   lastIncoming?: number;
   lastOutgoing?: number;
@@ -140,11 +142,34 @@ export class TUI {
     this.render();
   }
 
-  updateRequest(id: string, status: number, duration: number, error?: boolean): void {
+  // Add request that went through local shortcut (bypassed tunnel)
+  addLocalRequest(method: string, path: string): void {
+    this.requests.unshift({
+      id: crypto.randomUUID(),
+      method,
+      path,
+      startTime: Date.now(),
+      connectionType: "http",
+      status: 200,
+      duration: 0,
+      localDuration: 0,
+      isLocal: true,
+    });
+
+    if (this.requests.length > this.maxRequests) {
+      this.requests.pop();
+    }
+
+    this.scrollOffset = 0;
+    this.render();
+  }
+
+  updateRequest(id: string, status: number, duration: number, localDuration: number, error?: boolean): void {
     const req = this.requests.find((r) => r.id === id);
     if (req) {
       req.status = status;
       req.duration = duration;
+      req.localDuration = localDuration;
       req.error = error;
       this.render();
     }
@@ -285,7 +310,12 @@ export class TUI {
 
       // TIME column - show progress for streaming, no time for WS/SSE
       let time: string;
-      if (isLongLived) {
+      let timeIsLocal = false;
+      if (req.isLocal) {
+        // Local shortcut - bypassed tunnel
+        time = "LOCAL   ";
+        timeIsLocal = true;
+      } else if (isLongLived) {
         time = "        ";
       } else if (req.bytesTransferred !== undefined && req.status === undefined) {
         // Streaming in progress - show transferred bytes
@@ -310,7 +340,11 @@ export class TUI {
       this.term(" ");
 
       // Time
-      this.term.yellow(time);
+      if (timeIsLocal) {
+        this.term.magenta(time);
+      } else {
+        this.term.yellow(time);
+      }
       this.term(" ");
 
       // Path

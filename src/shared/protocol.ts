@@ -10,6 +10,7 @@ export type ServerMessage =
       path: string;
       headers: Record<string, string>;
       body?: string;
+      serverTimestamp: number; // Date.now() when server received request
     }
   | { type: "ping" }
   | { type: "error"; message: string };

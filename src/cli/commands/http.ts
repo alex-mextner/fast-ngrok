@@ -122,8 +122,8 @@ export async function httpCommand(
       tui.addRequest(req);
     },
 
-    onResponse: (id, status, duration, error) => {
-      tui.updateRequest(id, status, duration, error);
+    onResponse: (id, status, duration, localDuration, error) => {
+      tui.updateRequest(id, status, duration, localDuration, error);
     },
 
     onActivity: (id, direction) => {
@@ -157,6 +157,9 @@ export async function httpCommand(
           localPort: port,
           certPaths: preSetupResult.certPaths,
           hostsReady: preSetupResult.hostsReady,
+          onLocalRequest: (method, path) => {
+            tui.addLocalRequest(method, path);
+          },
         });
         const hostname = new URL(publicUrl).hostname;
         await localShortcut.activate(hostname);
