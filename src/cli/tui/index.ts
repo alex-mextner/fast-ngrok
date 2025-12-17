@@ -55,8 +55,11 @@ export class TUI {
 
     // Handle keyboard input
     this.term.grabInput({ mouse: false });
-    this.term.on("key", (key: string) => {
-      if (key === "CTRL_C" || key === "q") {
+    this.term.on("key", (key: string, _matches: string[], data: unknown) => {
+      // Check for Ctrl+C - works regardless of keyboard layout
+      const rawCode = (data as { code?: string })?.code;
+      const isCtrlC = key === "CTRL_C" || rawCode === "\x03";
+      if (isCtrlC || key === "q") {
         this.destroy();
         process.exit(0);
       }
