@@ -4,9 +4,13 @@ import { verifyApiKey } from "./auth.ts";
 import { generateSubdomain } from "./subdomain.ts";
 import { tunnelManager, type TunnelData } from "./tunnel-manager.ts";
 import { CaddyApi } from "./caddy-api.ts";
+import { subdomainCache } from "./subdomain-cache.ts";
 
 const config = getServerConfig();
 const caddy = new CaddyApi(config.caddyAdminUrl, config.baseDomain, config.tunnelPort);
+
+// Load persistent subdomain cache
+await subdomainCache.load();
 
 // Check Caddy availability on startup
 const caddyAvailable = await caddy.isAvailable();
@@ -17,7 +21,7 @@ if (!caddyAvailable) {
   console.warn(`[server] Routes won't be automatically registered`);
 }
 
-const server = Bun.serve<TunnelData>({
+Bun.serve<TunnelData>({
   port: config.tunnelPort,
 
   async fetch(req, server) {
@@ -27,20 +31,36 @@ const server = Bun.serve<TunnelData>({
     if (url.pathname === "/__tunnel__/connect") {
       const apiKey = req.headers.get("x-api-key");
 
-      if (!verifyApiKey(apiKey, config.apiKey)) {
+      if (!apiKey || !verifyApiKey(apiKey, config.apiKey)) {
         return new Response("Unauthorized", { status: 401 });
       }
 
-      // Check for requested subdomain (for reconnects or custom subdomain)
+      // Get client port for subdomain caching
+      const clientPort = parseInt(url.searchParams.get("port") || "0", 10);
+
+      // Check for requested subdomain, or use cached subdomain for this apiKey+port
       let subdomain = url.searchParams.get("subdomain");
-      console.log(`[tunnel] Connect request: subdomain=${subdomain || "(none)"}`);
+      const cachedSubdomain = clientPort > 0 ? subdomainCache.get(apiKey, clientPort) : undefined;
+
+      console.log(`[tunnel] Connect request: port=${clientPort}, subdomain=${subdomain || "(none)"}, cached=${cachedSubdomain || "(none)"}`);
+
+      // Priority: explicit subdomain > cached subdomain > generate new
+      if (!subdomain && cachedSubdomain) {
+        subdomain = cachedSubdomain;
+      }
 
       if (subdomain) {
         // Validate subdomain format (lowercase alphanumeric and hyphens)
         if (!/^[a-z0-9-]+$/.test(subdomain)) {
           return new Response("Invalid subdomain format", { status: 400 });
         }
-        // Check if subdomain is already in use
+
+        // Check if subdomain is reserved by different client
+        if (subdomainCache.isReservedByOther(apiKey, clientPort, subdomain)) {
+          return new Response("Subdomain reserved by another client", { status: 409 });
+        }
+
+        // Check if subdomain is already in use (active connection)
         const existingTunnel = tunnelManager.get(subdomain);
         if (existingTunnel) {
           // Same API key = reconnect, close old connection and allow new one
@@ -56,8 +76,13 @@ const server = Bun.serve<TunnelData>({
         subdomain = generateSubdomain();
       }
 
+      // Cache subdomain for this apiKey+port
+      if (clientPort > 0) {
+        subdomainCache.set(apiKey, clientPort, subdomain);
+      }
+
       const upgraded = server.upgrade(req, {
-        data: { subdomain, apiKey: apiKey! },
+        data: { subdomain, apiKey },
       });
 
       if (!upgraded) {

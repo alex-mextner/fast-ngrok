@@ -98,7 +98,6 @@ export async function httpCommand(
 
   // Use explicit subdomain, or cached subdomain for this port
   const subdomain = options.subdomain ?? config.portSubdomains?.[port];
-  console.log(`[debug] Cached subdomain for port ${port}: ${subdomain || "(none)"}`);
 
   const client = new TunnelClient({
     serverUrl: config.serverUrl,

@@ -38,11 +38,13 @@ export class TunnelClient {
         .replace("https://", "wss://")
         .replace("http://", "ws://");
 
-      // Build URL with optional subdomain parameter
-      let connectUrl = `${wsUrl}/__tunnel__/connect`;
+      // Build URL with port and optional subdomain parameter
+      const params = new URLSearchParams();
+      params.set("port", String(this.options.localPort));
       if (this.currentSubdomain) {
-        connectUrl += `?subdomain=${encodeURIComponent(this.currentSubdomain)}`;
+        params.set("subdomain", this.currentSubdomain);
       }
+      const connectUrl = `${wsUrl}/__tunnel__/connect?${params.toString()}`;
 
       // Bun's WebSocket constructor accepts headers in second argument
       this.ws = new WebSocket(connectUrl, {
