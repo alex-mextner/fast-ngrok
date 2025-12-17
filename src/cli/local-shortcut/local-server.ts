@@ -5,7 +5,8 @@
 
 import type { CertPaths } from "./mkcert.ts";
 
-const LOCAL_HTTPS_PORT = 8443;
+export const LOCAL_HTTPS_PORT = 8443;
+const PF_ANCHOR = "fast-ngrok";
 
 export interface LocalServerOptions {
   localPort: number;
@@ -15,12 +16,11 @@ export interface LocalServerOptions {
 
 export class LocalServer {
   private server: ReturnType<typeof Bun.serve> | null = null;
-  private pfEnabled = false;
 
   constructor(private options: LocalServerOptions) {}
 
   /**
-   * Start local HTTPS server with port forwarding
+   * Start local HTTPS server (pf forwarding should be set up in preSetup)
    */
   async start(): Promise<void> {
     // Start HTTPS server on high port
@@ -34,18 +34,12 @@ export class LocalServer {
         return this.handleRequest(req);
       },
     });
-
-    // Setup port forwarding 443 -> 8443
-    await this.enablePortForward();
   }
 
   /**
-   * Stop server and cleanup
+   * Stop server (pf rules are kept for next run)
    */
   async stop(): Promise<void> {
-    if (this.pfEnabled) {
-      await this.disablePortForward();
-    }
     this.server?.stop();
   }
 
@@ -86,53 +80,59 @@ export class LocalServer {
     }
   }
 
-  /**
-   * Enable pf port forwarding on macOS
-   * Redirects 443 -> 8443 on loopback
-   */
-  private async enablePortForward(): Promise<void> {
-    const anchor = "fast-ngrok";
-    const rule = `rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${LOCAL_HTTPS_PORT}`;
+}
 
-    try {
-      // Add anchor rule
-      const proc = Bun.spawn(["sudo", "pfctl", "-a", anchor, "-f", "-"], {
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+/**
+ * Check if pf redirect rule is already active
+ */
+async function isPfRedirectActive(): Promise<boolean> {
+  try {
+    const result = await Bun.$`sudo pfctl -a ${PF_ANCHOR} -s rules 2>/dev/null`.quiet();
+    const output = result.stdout.toString();
+    return output.includes("rdr pass") && output.includes("port 443");
+  } catch {
+    return false;
+  }
+}
 
-      proc.stdin.write(rule);
-      proc.stdin.end();
-
-      await proc.exited;
-
-      // Enable pf if not already enabled
-      await Bun.$`sudo pfctl -e 2>/dev/null || true`.quiet();
-
-      this.pfEnabled = true;
-    } catch (error) {
-      console.warn(
-        `⚠️  Could not setup port forwarding: ${error instanceof Error ? error.message : error}`
-      );
-      console.warn(`   Local shortcut will use port ${LOCAL_HTTPS_PORT} instead of 443`);
-    }
+/**
+ * Setup pf port forwarding on macOS (443 -> 8443)
+ * Should be called in preSetup before TUI starts
+ * Returns true if redirect is working
+ */
+export async function ensurePfRedirect(): Promise<boolean> {
+  // Check if already active
+  if (await isPfRedirectActive()) {
+    return true;
   }
 
-  /**
-   * Disable pf port forwarding
-   */
-  private async disablePortForward(): Promise<void> {
-    try {
-      const anchor = "fast-ngrok";
-      await Bun.$`sudo pfctl -a ${anchor} -F all 2>/dev/null`.quiet();
-      this.pfEnabled = false;
-    } catch {
-      // Ignore errors during cleanup
-    }
-  }
+  const rule = `rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${LOCAL_HTTPS_PORT}`;
 
-  get port(): number {
-    return this.pfEnabled ? 443 : LOCAL_HTTPS_PORT;
+  try {
+    // Add anchor rule
+    const proc = Bun.spawn(["sudo", "pfctl", "-a", PF_ANCHOR, "-f", "-"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    proc.stdin.write(rule);
+    proc.stdin.end();
+
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(stderr);
+    }
+
+    // Enable pf if not already enabled
+    await Bun.$`sudo pfctl -e 2>/dev/null || true`.quiet();
+
+    return true;
+  } catch (error) {
+    console.warn(
+      `⚠️  Could not setup port forwarding: ${error instanceof Error ? error.message : error}`
+    );
+    return false;
   }
 }

@@ -89,3 +89,38 @@ export async function hasHostsEntry(hostname: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Remove ALL fast-ngrok entries from /etc/hosts
+ */
+export async function removeAllHostsEntries(): Promise<boolean> {
+  const currentContent = await Bun.file(HOSTS_FILE).text();
+
+  // Filter out all lines with our marker
+  const lines = currentContent.split("\n");
+  const filteredLines = lines.filter((line) => !line.includes(MARKER));
+
+  const newContent = filteredLines.join("\n");
+
+  if (newContent === currentContent) {
+    return false; // Nothing to remove
+  }
+
+  // Write back using sudo tee
+  const proc = Bun.spawn(["sudo", "tee", HOSTS_FILE], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  proc.stdin.write(newContent);
+  proc.stdin.end();
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Failed to remove hosts entries: ${stderr}`);
+  }
+
+  return true;
+}

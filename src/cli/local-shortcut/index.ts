@@ -10,9 +10,11 @@
  */
 
 import { platform } from "os";
-import { addHostsEntry } from "./hosts.ts";
+import { addHostsEntry, removeAllHostsEntries } from "./hosts.ts";
 import { ensureMkcertReady, type CertPaths } from "./mkcert.ts";
-import { LocalServer } from "./local-server.ts";
+import { LocalServer, ensurePfRedirect } from "./local-server.ts";
+
+export { removeAllHostsEntries };
 
 export interface LocalShortcutOptions {
   localPort: number;
@@ -156,6 +158,16 @@ export async function preSetupLocalShortcut(
     let hostsReady = false;
     let expectedHostname: string | null = null;
 
+    // 3. Setup pf port forwarding (443 -> 8443)
+    console.log("🔀 Setting up port forwarding (443 → 8443)...");
+    const pfReady = await ensurePfRedirect();
+    if (pfReady) {
+      console.log("✅ Port forwarding ready");
+    } else {
+      console.log("⚠️  Port forwarding failed - local shortcut may not work");
+    }
+
+    // 4. If we have cached subdomain, add hosts entry NOW (before TUI)
     if (cachedSubdomain) {
       expectedHostname = `${cachedSubdomain}.${baseDomain}`;
       console.log(`📝 Adding hosts entry for ${expectedHostname}...`);

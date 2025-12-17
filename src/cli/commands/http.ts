@@ -6,6 +6,7 @@ import {
   LocalShortcut,
   shouldEnableLocalShortcut,
   preSetupLocalShortcut,
+  removeAllHostsEntries,
   type PreSetupResult,
 } from "../local-shortcut/index.ts";
 
@@ -97,6 +98,16 @@ export async function httpCommand(
   if (enableLocalShortcut) {
     // Pass cached subdomain so hosts entry can be added before TUI
     preSetupResult = await preSetupLocalShortcut(config.serverUrl, subdomain);
+  } else {
+    // Remove hosts entries if local shortcut disabled (otherwise DNS points to localhost with nothing listening)
+    try {
+      const removed = await removeAllHostsEntries();
+      if (removed) {
+        console.log("🗑️  Removed local shortcut hosts entries\n");
+      }
+    } catch {
+      // Ignore - might not have sudo or no entries to remove
+    }
   }
 
   const tui = new TUI(port);
