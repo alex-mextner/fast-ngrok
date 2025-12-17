@@ -75,6 +75,11 @@ const server = Bun.serve<TunnelData>({
       return new Response("OK", { status: 200 });
     }
 
+    // Health check endpoint (no auth required)
+    if (url.pathname === "/__tunnel__/health") {
+      return new Response("OK", { status: 200 });
+    }
+
     // Status endpoint
     if (url.pathname === "/__tunnel__/status") {
       return Response.json(tunnelManager.getStats());

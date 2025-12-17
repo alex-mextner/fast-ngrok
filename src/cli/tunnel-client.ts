@@ -20,6 +20,7 @@ export class TunnelClient {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private shouldReconnect = true;
+  private hasConnectedOnce = false; // Only reconnect if we connected at least once
   private pingInterval: Timer | null = null;
   private currentSubdomain: string | null = null; // Preserve across reconnects
 
@@ -64,7 +65,8 @@ export class TunnelClient {
         this.stopPingInterval();
         this.options.onDisconnect?.();
 
-        if (this.shouldReconnect) {
+        // Only reconnect if we successfully connected at least once
+        if (this.shouldReconnect && this.hasConnectedOnce) {
           this.scheduleReconnect();
         }
       });
@@ -90,6 +92,7 @@ export class TunnelClient {
         case "connected":
           // Save subdomain for reconnects
           this.currentSubdomain = message.subdomain;
+          this.hasConnectedOnce = true;
           this.options.onConnect?.(message.subdomain, message.publicUrl);
           break;
 

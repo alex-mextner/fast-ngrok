@@ -66,6 +66,25 @@ export async function httpCommand(
     process.exit(1);
   }
 
+  // Check server availability before starting TUI
+  try {
+    const healthUrl = `${config.serverUrl}/__tunnel__/health`;
+    const response = await fetch(healthUrl, {
+      method: "GET",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.error(`\nServer returned ${response.status}. Is the tunnel server running?`);
+      process.exit(1);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`\nCannot connect to tunnel server at ${config.serverUrl}`);
+    console.error(`Error: ${message}\n`);
+    console.error(`Make sure the tunnel server is running and accessible.`);
+    process.exit(1);
+  }
+
   const enableLocalShortcut = shouldEnableLocalShortcut(options.noLocalShortcut);
   let localShortcut: LocalShortcut | null = null;
 
