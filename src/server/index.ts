@@ -109,14 +109,12 @@ const server = Bun.serve<TunnelData>({
   },
 
   websocket: {
-    async open(ws) {
+    open(ws) {
       const { subdomain, apiKey } = ws.data;
       tunnelManager.register(subdomain, ws, apiKey);
 
-      // Register route in Caddy
-      if (caddyAvailable) {
-        await caddy.addTunnelRoute(subdomain);
-      }
+      // No need to register individual routes in Caddy - wildcard *.tunnel.domain handles all
+      // Adding routes via Admin API causes Caddy to reload, which closes WebSocket connections!
 
       // Send connection confirmation
       const message: ServerMessage = {
@@ -145,14 +143,10 @@ const server = Bun.serve<TunnelData>({
       }
     },
 
-    async close(ws) {
+    close(ws) {
       const { subdomain } = ws.data;
       tunnelManager.unregister(subdomain);
-
-      // Remove route from Caddy
-      if (caddyAvailable) {
-        await caddy.removeTunnelRoute(subdomain);
-      }
+      // No Caddy route cleanup needed - using wildcard
     },
 
     // Heartbeat to keep connection alive

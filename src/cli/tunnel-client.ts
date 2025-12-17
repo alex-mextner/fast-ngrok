@@ -61,7 +61,8 @@ export class TunnelClient {
         await this.handleMessage(event.data.toString());
       });
 
-      this.ws.addEventListener("close", () => {
+      this.ws.addEventListener("close", (event) => {
+        console.error(`[ws] Connection closed: code=${event.code}, reason=${event.reason}`);
         this.stopPingInterval();
         this.options.onDisconnect?.();
 

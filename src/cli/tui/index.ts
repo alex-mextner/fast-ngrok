@@ -166,14 +166,16 @@ export class TUI {
       this.term.moveTo(1, 3);
       this.term.white("         -> ");
       this.term.yellow(`http://localhost:${this.localPort}`);
+    } else if (this.errorMessage) {
+      this.term.bgRed.white(` ERROR: ${this.errorMessage} `);
     } else {
       this.term.gray("Connecting...");
     }
 
-    // Error message
-    if (this.errorMessage) {
+    // Error message (also show if connected but error occurred)
+    if (this.errorMessage && this.publicUrl) {
       this.term.moveTo(1, 3);
-      this.term.red(`Error: ${this.errorMessage}`);
+      this.term.bgRed.white(` ERROR: ${this.errorMessage} `);
     }
 
     // Separator
