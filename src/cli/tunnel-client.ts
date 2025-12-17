@@ -168,24 +168,42 @@ export class TunnelClient {
         responseHeaders[key] = value;
       });
 
+      // Proxy-level ETag validation
+      // Dev servers (Bun, Vite) don't implement conditional GET, so we do it ourselves
+      const ifNoneMatch = message.headers["if-none-match"];
+      const responseEtag = response.headers.get("etag");
+      if (ifNoneMatch && responseEtag && response.status === 200) {
+        // Normalize ETags for comparison (remove weak validator prefix if present)
+        const normalizeEtag = (etag: string) => etag.replace(/^W\//, "").trim();
+        if (normalizeEtag(ifNoneMatch) === normalizeEtag(responseEtag)) {
+          // ETags match - return 304 Not Modified
+          const duration = Date.now() - startTime;
+
+          // Only send cache-related headers
+          const notModifiedHeaders: Record<string, string> = { etag: responseEtag };
+          const cacheControl = response.headers.get("cache-control");
+          if (cacheControl) notModifiedHeaders["cache-control"] = cacheControl;
+          const vary = response.headers.get("vary");
+          if (vary) notModifiedHeaders.vary = vary;
+
+          const notModifiedMsg: ClientMessage = {
+            type: "http_response",
+            requestId: message.requestId,
+            status: 304,
+            headers: notModifiedHeaders,
+            body: "",
+          };
+          this.ws?.send(JSON.stringify(notModifiedMsg));
+          this.options.onResponse?.(message.requestId, 304, duration, false);
+          return;
+        }
+      }
+
       // Check content-length to decide streaming vs buffering
       const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
       const contentEncoding = response.headers.get("content-encoding");
       const contentType = responseHeaders["content-type"] || "";
       const acceptEncoding = message.headers["accept-encoding"] || "";
-
-      // Debug: log compression and caching info for large files
-      if (contentLength > 50000) {
-        console.log(`[DEBUG] ${message.method} ${message.path}`);
-        console.log(`  status: ${response.status}`);
-        console.log(`  content-length: ${contentLength}`);
-        console.log(`  content-type: ${contentType}`);
-        console.log(`  content-encoding from local: ${contentEncoding}`);
-        console.log(`  accept-encoding from browser: ${acceptEncoding}`);
-        console.log(`  if-none-match from browser: ${message.headers["if-none-match"] || "(none)"}`);
-        console.log(`  etag from local: ${response.headers.get("etag") || "(none)"}`);
-        console.log(`  compressible: ${this.isCompressible(contentType)}`);
-      }
 
       // Determine response handling mode:
       // - Small (<=256KB): buffer + compress + send
