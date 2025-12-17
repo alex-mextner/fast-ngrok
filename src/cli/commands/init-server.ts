@@ -79,6 +79,29 @@ export async function initServerCommand(): Promise<void> {
     process.exit(1);
   }
 
+  // Check for nginx (not supported)
+  const nginxRunning = await checkNginxRunning();
+  if (nginxRunning) {
+    term.red("\n⚠ Warning: nginx is running on this server\n\n");
+    term.white("fast-ngrok uses Caddy as reverse proxy and cannot work alongside nginx.\n");
+    term.white("nginx will conflict with Caddy on ports 80/443.\n\n");
+    term.white("Options:\n");
+    term.gray("  1. Stop and disable nginx: ");
+    term.cyan("sudo systemctl stop nginx && sudo systemctl disable nginx\n");
+    term.gray("  2. Migrate your nginx configs to Caddy\n");
+    term.gray("  3. Use a different server without nginx\n\n");
+
+    term.white("Continue anyway? [y/N]: ");
+    const answer = await inputField("N");
+    term("\n");
+
+    if (answer.toLowerCase() !== "y") {
+      term.yellow("Setup cancelled.\n");
+      process.exit(0);
+    }
+    term("\n");
+  }
+
   // Collect configuration
   const config = await collectConfig();
 
@@ -254,6 +277,20 @@ async function collectConfig(): Promise<InitConfig> {
     installDir,
     serverIp,
   };
+}
+
+async function checkNginxRunning(): Promise<boolean> {
+  try {
+    // Check via systemctl first
+    const systemctl = await Bun.$`systemctl is-active nginx`.nothrow().quiet();
+    if (systemctl.exitCode === 0) return true;
+
+    // Fallback: check for running process
+    const pgrep = await Bun.$`pgrep -x nginx`.nothrow().quiet();
+    return pgrep.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function hasBun(): Promise<boolean> {
