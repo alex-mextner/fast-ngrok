@@ -35,6 +35,15 @@ Usage:
 `;
 
 async function main() {
+  // Global error handlers - don't exit, let the process continue
+  process.on("unhandledRejection", (reason) => {
+    console.error("[fatal] Unhandled Rejection:", reason);
+  });
+
+  process.on("uncaughtException", (error) => {
+    console.error("[fatal] Uncaught Exception:", error);
+  });
+
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     options: {

@@ -15,6 +15,7 @@ export class TUI {
   private publicUrl: string | null = null;
   private connected = false;
   private errorMessage: string | null = null;
+  private reconnecting: { attempt: number; delayMs: number } | null = null;
   private maxRequests = 100;
   private scrollOffset = 0;
   private renderInterval: Timer | null = null;
@@ -102,11 +103,17 @@ export class TUI {
     this.publicUrl = publicUrl;
     this.connected = true;
     this.errorMessage = null;
+    this.reconnecting = null;
     this.render();
   }
 
   setDisconnected(): void {
     this.connected = false;
+    this.render();
+  }
+
+  setReconnecting(attempt: number, delayMs: number): void {
+    this.reconnecting = { attempt, delayMs };
     this.render();
   }
 
@@ -166,10 +173,19 @@ export class TUI {
     this.term.bold.cyan("fast-ngrok");
 
     // Status indicator
-    const statusText = this.connected ? " [Connected] " : " [Disconnected] ";
+    let statusText: string;
+    if (this.connected) {
+      statusText = " [Connected] ";
+    } else if (this.reconnecting) {
+      statusText = ` [Reconnecting #${this.reconnecting.attempt}] `;
+    } else {
+      statusText = " [Disconnected] ";
+    }
     this.term.moveTo(width - statusText.length, 1);
     if (this.connected) {
       this.term.bgGreen.black(statusText);
+    } else if (this.reconnecting) {
+      this.term.bgYellow.black(statusText);
     } else {
       this.term.bgRed.white(statusText);
     }

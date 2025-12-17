@@ -13,6 +13,7 @@ interface CacheData {
 class SubdomainCache {
   private data: CacheData = { mappings: {} };
   private dirty = false;
+  private saveTimeout: Timer | null = null;
 
   async load(): Promise<void> {
     try {
@@ -53,8 +54,24 @@ class SubdomainCache {
     if (this.data.mappings[key] !== subdomain) {
       this.data.mappings[key] = subdomain;
       this.dirty = true;
-      this.save(); // fire and forget
+      this.scheduleSave(); // debounced
     }
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimeout) return; // already scheduled
+    this.saveTimeout = setTimeout(async () => {
+      this.saveTimeout = null;
+      await this.save();
+    }, 1000); // 1s debounce
+  }
+
+  async forceSave(): Promise<void> {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    await this.save();
   }
 
   // Find if subdomain is already reserved by different apiKey:port

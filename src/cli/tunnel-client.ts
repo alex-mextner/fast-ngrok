@@ -13,13 +13,13 @@ export interface TunnelClientOptions {
   onConnect?: (subdomain: string, publicUrl: string) => void;
   onDisconnect?: () => void;
   onError?: (message: string) => void;
+  onReconnecting?: (attempt: number, delayMs: number) => void;
 }
 
 export class TunnelClient {
   private ws: WebSocket | null = null;
   private localProxy: LocalProxy;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private shouldReconnect = true;
   private hasConnectedOnce = false; // Only reconnect if we connected at least once
   private pingInterval: Timer | null = null;
@@ -55,13 +55,18 @@ export class TunnelClient {
       } as unknown as string | string[]);
 
       this.ws.addEventListener("open", () => {
+        this.hasConnectedOnce = true; // Enable reconnect after first successful connection
         this.reconnectAttempts = 0;
         this.startPingInterval();
         resolve();
       });
 
       this.ws.addEventListener("message", async (event) => {
-        await this.handleMessage(event.data.toString());
+        try {
+          await this.handleMessage(event.data.toString());
+        } catch (error) {
+          console.error("[ws] Message handling error:", error);
+        }
       });
 
       this.ws.addEventListener("close", (event) => {
@@ -96,7 +101,6 @@ export class TunnelClient {
         case "connected":
           // Save subdomain for reconnects
           this.currentSubdomain = message.subdomain;
-          this.hasConnectedOnce = true;
           this.options.onConnect?.(message.subdomain, message.publicUrl);
           break;
 
@@ -315,17 +319,22 @@ export class TunnelClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.options.onError?.("Max reconnect attempts reached");
-      process.exit(1);
-    }
-
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    // Infinite retry with exponential backoff, cap at 60s
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60000);
     this.reconnectAttempts++;
+
+    // Notify about reconnect status
+    this.options.onReconnecting?.(this.reconnectAttempts, delay);
+
+    // Log every 10 attempts
+    if (this.reconnectAttempts % 10 === 0) {
+      this.options.onError?.(`Still trying to reconnect (attempt ${this.reconnectAttempts})...`);
+    }
 
     setTimeout(() => {
       this.connect().catch((error) => {
         this.options.onError?.(`Reconnect failed: ${error}`);
+        // Don't exit - close handler will trigger scheduleReconnect again
       });
     }, delay);
   }

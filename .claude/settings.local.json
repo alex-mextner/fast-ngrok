@@ -1,17 +1,18 @@
 {
-	"permissions": {
-		"allow": [
-			"Bash(bun run:*)",
-			"Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
-			"Bash(bun:*)",
-			"Bash(timeout 2 bun run:*)",
-			"Bash(git push)",
-			"Bash(git add:*)",
-			"Bash(git commit:*)",
-			"Bash(curl:*)",
-			"Bash(echo:*)",
-			"Bash(ssh root@104.248.84.190 \"cat /etc/caddy/Caddyfile\")",
-			"Bash(ssh root@104.248.84.190:*)"
-		]
-	}
+  "permissions": {
+    "allow": [
+      "Bash(bun run:*)",
+      "Bash(bun /Users/ultra/xp/fast-ngrok/src/cli/index.ts:*)",
+      "Bash(bun:*)",
+      "Bash(timeout 2 bun run:*)",
+      "Bash(git push)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(ssh root@104.248.84.190 \"cat /etc/caddy/Caddyfile\")",
+      "Bash(ssh root@104.248.84.190:*)",
+      "Bash(xargs:*)"
+    ]
+  }
 }

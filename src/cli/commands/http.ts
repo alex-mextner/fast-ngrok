@@ -159,6 +159,10 @@ export async function httpCommand(
       tui.setDisconnected();
     },
 
+    onReconnecting: (attempt, delayMs) => {
+      tui.setReconnecting(attempt, delayMs);
+    },
+
     onError: (message) => {
       tui.setError(message);
     },

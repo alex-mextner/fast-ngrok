@@ -106,8 +106,12 @@ Bun.serve<TunnelData>({
       return new Response("OK", { status: 200 });
     }
 
-    // Status endpoint
+    // Status endpoint (requires auth)
     if (url.pathname === "/__tunnel__/status") {
+      const apiKey = req.headers.get("x-api-key");
+      if (!apiKey || !verifyApiKey(apiKey, config.apiKey)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       return Response.json(tunnelManager.getStats());
     }
 
@@ -189,3 +193,33 @@ Bun.serve<TunnelData>({
 console.log(`[server] Fast-ngrok server running on port ${config.tunnelPort}`);
 console.log(`[server] Base domain: ${config.baseDomain}`);
 console.log(`[server] Caddy API: ${caddyAvailable ? "available" : "not available"}`);
+
+// Graceful shutdown handlers
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`[server] ${signal} received, shutting down gracefully...`);
+
+  // 1. Close all tunnels with notification
+  for (const tunnel of tunnelManager.getAllTunnels()) {
+    tunnel.ws.close(1001, "Server shutting down");
+  }
+
+  // 2. Wait for pending requests to complete (max 5s)
+  const start = Date.now();
+  while (tunnelManager.hasPendingRequests() && Date.now() - start < 5000) {
+    await Bun.sleep(100);
+  }
+
+  // 3. Force save subdomain cache
+  await subdomainCache.forceSave();
+
+  console.log("[server] Shutdown complete");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

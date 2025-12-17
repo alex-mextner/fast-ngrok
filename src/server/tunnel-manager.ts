@@ -134,7 +134,14 @@ class TunnelManager {
         timeout,
       });
 
-      tunnel.ws.send(JSON.stringify(message));
+      // Check WebSocket state before sending (race condition fix)
+      if (tunnel.ws.readyState === 1) { // WebSocket.OPEN
+        tunnel.ws.send(JSON.stringify(message));
+      } else {
+        clearTimeout(timeout);
+        tunnel.pendingRequests.delete(requestId);
+        resolve(new Response("Tunnel disconnected", { status: 502 }));
+      }
     });
   }
 
@@ -197,6 +204,18 @@ class TunnelManager {
         pendingRequests: t.pendingRequests.size,
       })),
     };
+  }
+
+  // Helper methods for graceful shutdown
+  getAllTunnels(): ActiveTunnel[] {
+    return Array.from(this.tunnels.values());
+  }
+
+  hasPendingRequests(): boolean {
+    for (const tunnel of this.tunnels.values()) {
+      if (tunnel.pendingRequests.size > 0) return true;
+    }
+    return false;
   }
 }
 
