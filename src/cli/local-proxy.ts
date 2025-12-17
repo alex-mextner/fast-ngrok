@@ -24,6 +24,7 @@ export class LocalProxy {
         method,
         headers: forwardHeaders,
         body: method !== "GET" && method !== "HEAD" ? body : undefined,
+        redirect: "manual", // Don't follow redirects, proxy them as-is
       });
     } catch (error) {
       // Local server not available
