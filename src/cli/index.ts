@@ -4,15 +4,17 @@ import { parseArgs } from "util";
 import { httpCommand } from "./commands/http.ts";
 import { authCommand } from "./commands/auth.ts";
 import { initServerCommand } from "./commands/init-server.ts";
+import { updateServiceCommand } from "./commands/update-service.ts";
 
 const HELP = `
 fast-ngrok - Simple tunnel to localhost
 
 Commands:
-  init-server   Setup server (VPS, requires sudo)
-  server        Run tunnel server daemon (VPS)
-  auth          Configure credentials (client)
-  http <port>   Start tunnel to local server (client)
+  init-server     Setup server (VPS, requires sudo)
+  update-service  Update systemd service (VPS, requires sudo)
+  server          Run tunnel server daemon (VPS)
+  auth            Configure credentials (client)
+  http <port>     Start tunnel to local server (client)
 
 Options:
   --subdomain <name>   Use custom subdomain (e.g., --subdomain my-app)
@@ -73,6 +75,10 @@ async function main() {
 
     case "init-server":
       await initServerCommand();
+      break;
+
+    case "update-service":
+      await updateServiceCommand();
       break;
 
     case "server":
