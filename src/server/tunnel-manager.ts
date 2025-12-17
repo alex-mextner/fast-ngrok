@@ -22,6 +22,7 @@ export interface TunnelData {
 interface ActiveTunnel {
   ws: ServerWebSocket<TunnelData>;
   subdomain: string;
+  apiKey: string;
   createdAt: number;
   pendingRequests: Map<string, PendingRequest>;
 }
@@ -31,10 +32,11 @@ const REQUEST_TIMEOUT = 30000; // 30 seconds
 class TunnelManager {
   private tunnels = new Map<string, ActiveTunnel>();
 
-  register(subdomain: string, ws: ServerWebSocket<TunnelData>): void {
+  register(subdomain: string, ws: ServerWebSocket<TunnelData>, apiKey: string): void {
     this.tunnels.set(subdomain, {
       ws,
       subdomain,
+      apiKey,
       createdAt: Date.now(),
       pendingRequests: new Map(),
     });

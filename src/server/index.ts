@@ -39,9 +39,17 @@ const server = Bun.serve<TunnelData>({
         if (!/^[a-z0-9-]+$/.test(subdomain)) {
           return new Response("Invalid subdomain format", { status: 400 });
         }
-        // Check if subdomain is already in use by another connection
-        if (tunnelManager.has(subdomain)) {
-          return new Response("Subdomain already in use", { status: 409 });
+        // Check if subdomain is already in use
+        const existingTunnel = tunnelManager.get(subdomain);
+        if (existingTunnel) {
+          // Same API key = reconnect, close old connection and allow new one
+          if (existingTunnel.apiKey === apiKey) {
+            console.log(`[tunnel] Closing stale connection for ${subdomain} (reconnect)`);
+            existingTunnel.ws.close(1000, "Reconnecting");
+            tunnelManager.unregister(subdomain);
+          } else {
+            return new Response("Subdomain already in use", { status: 409 });
+          }
         }
       } else {
         subdomain = generateSubdomain();
@@ -97,8 +105,8 @@ const server = Bun.serve<TunnelData>({
 
   websocket: {
     async open(ws) {
-      const { subdomain } = ws.data;
-      tunnelManager.register(subdomain, ws);
+      const { subdomain, apiKey } = ws.data;
+      tunnelManager.register(subdomain, ws, apiKey);
 
       // Register route in Caddy
       if (caddyAvailable) {
