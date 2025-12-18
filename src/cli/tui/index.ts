@@ -15,8 +15,19 @@ interface RequestLog extends RequestInfo {
   totalBytes?: number;
 }
 
+// Incremental stats tracking
+interface Stats {
+  total: number;
+  success: number;    // 2xx
+  clientErr: number;  // 4xx
+  serverErr: number;  // 5xx
+  totalDuration: number;
+  completedCount: number;
+}
+
 export class TUI {
   private requests: RequestLog[] = [];
+  private requestsMap = new Map<string, RequestLog>(); // O(1) lookup by id
   private publicUrl: string | null = null;
   private connected = false;
   private errorMessage: string | null = null;
@@ -27,6 +38,10 @@ export class TUI {
   // Lazy-initialized terminal - only created when start() is called
   // This prevents terminal capture during module import (before sudo prompts, etc.)
   private term: terminalKit.Terminal | null = null;
+  // Render-on-change: only render when state changes
+  private needsRender = false;
+  // Incremental stats
+  private stats: Stats = { total: 0, success: 0, clientErr: 0, serverErr: 0, totalDuration: 0, completedCount: 0 };
 
   constructor(private localPort: number) {}
 
@@ -87,10 +102,22 @@ export class TUI {
 
     this.render();
 
-    // Periodic render for elapsed time updates
+    // Periodic render for activity indicators and elapsed time
+    // Only actually renders if needsRender flag is set
     this.renderInterval = setInterval(() => {
-      this.render();
+      // Always check for activity indicator decay (WS/SSE arrows)
+      const hasActiveConnections = this.requests.some(
+        r => (r.connectionType === 'ws' || r.connectionType === 'sse') && !r.status
+      );
+      if (hasActiveConnections || this.needsRender) {
+        this.needsRender = false;
+        this.render();
+      }
     }, 1000);
+  }
+
+  private scheduleRender(): void {
+    this.needsRender = true;
   }
 
   destroy(): void {
@@ -109,31 +136,49 @@ export class TUI {
     this.connected = true;
     this.errorMessage = null;
     this.reconnecting = null;
-    this.render();
+    this.render(); // Immediate render for connection status
   }
 
   setDisconnected(): void {
     this.connected = false;
-    this.render();
+    this.render(); // Immediate render for connection status
   }
 
   setReconnecting(attempt: number, delayMs: number): void {
     this.reconnecting = { attempt, delayMs };
-    this.render();
+    this.render(); // Immediate render for connection status
   }
 
   setError(message: string): void {
     this.errorMessage = message;
-    this.render();
+    this.render(); // Immediate render for errors
   }
 
   addRequest(req: RequestInfo): void {
-    this.requests.unshift({
-      ...req,
-    });
+    const logEntry: RequestLog = { ...req };
+    this.requests.unshift(logEntry);
+    this.requestsMap.set(req.id, logEntry);
 
+    // Update stats
+    this.stats.total++;
+
+    // Remove oldest if over limit
     if (this.requests.length > this.maxRequests) {
-      this.requests.pop();
+      const removed = this.requests.pop();
+      if (removed) {
+        this.requestsMap.delete(removed.id);
+        // Adjust stats for removed request
+        this.stats.total--;
+        if (removed.status) {
+          if (removed.status < 400) this.stats.success--;
+          else if (removed.status < 500) this.stats.clientErr--;
+          else this.stats.serverErr--;
+        }
+        if (removed.duration !== undefined) {
+          this.stats.totalDuration -= removed.duration;
+          this.stats.completedCount--;
+        }
+      }
     }
 
     // Auto-scroll to top for new requests
@@ -143,8 +188,9 @@ export class TUI {
 
   // Add request that went through local shortcut (bypassed tunnel)
   addLocalRequest(method: string, path: string): void {
-    this.requests.unshift({
-      id: crypto.randomUUID(),
+    const id = crypto.randomUUID();
+    const logEntry: RequestLog = {
+      id,
       method,
       path,
       startTime: Date.now(),
@@ -152,10 +198,30 @@ export class TUI {
       status: 200,
       duration: 0,
       isLocal: true,
-    });
+    };
+    this.requests.unshift(logEntry);
+    this.requestsMap.set(id, logEntry);
+
+    // Update stats (local requests are always 200)
+    this.stats.total++;
+    this.stats.success++;
+    this.stats.completedCount++;
 
     if (this.requests.length > this.maxRequests) {
-      this.requests.pop();
+      const removed = this.requests.pop();
+      if (removed) {
+        this.requestsMap.delete(removed.id);
+        this.stats.total--;
+        if (removed.status) {
+          if (removed.status < 400) this.stats.success--;
+          else if (removed.status < 500) this.stats.clientErr--;
+          else this.stats.serverErr--;
+        }
+        if (removed.duration !== undefined) {
+          this.stats.totalDuration -= removed.duration;
+          this.stats.completedCount--;
+        }
+      }
     }
 
     this.scrollOffset = 0;
@@ -163,8 +229,22 @@ export class TUI {
   }
 
   updateRequest(id: string, status: number, duration: number, error?: boolean): void {
-    const req = this.requests.find((r) => r.id === id);
+    const req = this.requestsMap.get(id);
     if (req) {
+      // Update stats for status change
+      if (!req.status && status) {
+        if (status < 400) this.stats.success++;
+        else if (status < 500) this.stats.clientErr++;
+        else this.stats.serverErr++;
+      }
+      // Update duration stats
+      if (req.duration === undefined && duration !== undefined) {
+        this.stats.totalDuration += duration;
+        this.stats.completedCount++;
+      } else if (req.duration !== undefined && duration !== undefined) {
+        this.stats.totalDuration += duration - req.duration;
+      }
+
       req.status = status;
       req.duration = duration;
       req.error = error;
@@ -173,40 +253,54 @@ export class TUI {
   }
 
   updateActivity(id: string, direction: 'in' | 'out'): void {
-    const req = this.requests.find((r) => r.id === id);
+    const req = this.requestsMap.get(id);
     if (req) {
       const now = Date.now();
       if (direction === 'in') req.lastIncoming = now;
       else req.lastOutgoing = now;
-      this.render();
+      this.scheduleRender(); // Batch activity updates
     }
   }
 
   updateProgress(id: string, bytesTransferred: number, totalBytes?: number): void {
-    const req = this.requests.find((r) => r.id === id);
+    const req = this.requestsMap.get(id);
     if (req) {
       req.bytesTransferred = bytesTransferred;
       if (totalBytes !== undefined) req.totalBytes = totalBytes;
-      this.render();
+      this.scheduleRender(); // Batch progress updates
     }
   }
 
   // Update with real end-to-end duration from server
   updateTiming(id: string, duration: number): void {
-    const req = this.requests.find((r) => r.id === id);
+    const req = this.requestsMap.get(id);
     if (req) {
+      // Update duration stats
+      if (req.duration !== undefined) {
+        this.stats.totalDuration += duration - req.duration;
+      } else {
+        this.stats.totalDuration += duration;
+        this.stats.completedCount++;
+      }
       req.duration = duration;
-      this.render();
+      this.scheduleRender(); // Batch timing updates
     }
   }
 
   setRequestError(id: string, message: string, duration: number): void {
-    const req = this.requests.find((r) => r.id === id);
+    const req = this.requestsMap.get(id);
     if (req) {
       req.error = true;
       req.errorMessage = message;
+      // Update duration stats
+      if (req.duration === undefined) {
+        this.stats.totalDuration += duration;
+        this.stats.completedCount++;
+      } else {
+        this.stats.totalDuration += duration - req.duration;
+      }
       req.duration = duration;
-      this.render();
+      this.render(); // Immediate render for errors
     }
   }
 
@@ -364,13 +458,12 @@ export class TUI {
     this.term.moveTo(1, footerY - 1);
     this.term.gray("─".repeat(width));
 
-    // Stats
+    // Stats (pre-calculated, O(1))
     this.term.moveTo(1, footerY);
-    const total = this.requests.length;
-    const success = this.requests.filter((r) => r.status && r.status < 400).length;
-    const clientErr = this.requests.filter((r) => r.status && r.status >= 400 && r.status < 500).length;
-    const serverErr = this.requests.filter((r) => r.status && r.status >= 500).length;
-    const avgTime = this.calculateAvgTime();
+    const { total, success, clientErr, serverErr } = this.stats;
+    const avgTime = this.stats.completedCount > 0
+      ? Math.round(this.stats.totalDuration / this.stats.completedCount)
+      : 0;
 
     this.term.white(`Requests: ${total}`);
     this.term.gray(" | ");
@@ -472,14 +565,6 @@ export class TUI {
     if (inActive) return '→';
     if (outActive) return '←';
     return '·';
-  }
-
-  private calculateAvgTime(): number {
-    const completed = this.requests.filter((r) => r.duration !== undefined);
-    if (completed.length === 0) return 0;
-
-    const total = completed.reduce((sum, r) => sum + (r.duration || 0), 0);
-    return Math.round(total / completed.length);
   }
 
   private formatBytes(bytes: number, total?: number): string {
