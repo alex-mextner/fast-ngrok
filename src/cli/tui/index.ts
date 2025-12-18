@@ -42,6 +42,10 @@ export class TUI {
   private needsRender = false;
   // Incremental stats
   private stats: Stats = { total: 0, success: 0, clientErr: 0, serverErr: 0, totalDuration: 0, completedCount: 0 };
+  // Throttle renders to max 10fps (100ms between renders)
+  private lastRenderTime = 0;
+  private renderThrottleMs = 100;
+  private pendingRenderTimeout: Timer | null = null;
 
   constructor(private localPort: number) {}
 
@@ -120,9 +124,42 @@ export class TUI {
     this.needsRender = true;
   }
 
+  // Throttled render - max 10fps to prevent terminal overload
+  private throttledRender(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRenderTime;
+
+    if (elapsed >= this.renderThrottleMs) {
+      // Enough time passed - render immediately
+      this.lastRenderTime = now;
+      this.doRender();
+    } else if (!this.pendingRenderTimeout) {
+      // Schedule render for later
+      this.pendingRenderTimeout = setTimeout(() => {
+        this.pendingRenderTimeout = null;
+        this.lastRenderTime = Date.now();
+        this.doRender();
+      }, this.renderThrottleMs - elapsed);
+    }
+    // If timeout already pending, skip - it will render soon
+  }
+
+  // Immediate render (for critical state changes like connect/disconnect)
+  private render(): void {
+    if (this.pendingRenderTimeout) {
+      clearTimeout(this.pendingRenderTimeout);
+      this.pendingRenderTimeout = null;
+    }
+    this.lastRenderTime = Date.now();
+    this.doRender();
+  }
+
   destroy(): void {
     if (this.renderInterval) {
       clearInterval(this.renderInterval);
+    }
+    if (this.pendingRenderTimeout) {
+      clearTimeout(this.pendingRenderTimeout);
     }
     if (this.term) {
       this.term.grabInput(false);
@@ -183,7 +220,7 @@ export class TUI {
 
     // Auto-scroll to top for new requests
     this.scrollOffset = 0;
-    this.render();
+    this.throttledRender();
   }
 
   // Add request that went through local shortcut (bypassed tunnel)
@@ -225,7 +262,7 @@ export class TUI {
     }
 
     this.scrollOffset = 0;
-    this.render();
+    this.throttledRender();
   }
 
   updateRequest(id: string, status: number, duration: number, error?: boolean): void {
@@ -248,7 +285,7 @@ export class TUI {
       req.status = status;
       req.duration = duration;
       req.error = error;
-      this.render();
+      this.throttledRender();
     }
   }
 
@@ -300,7 +337,7 @@ export class TUI {
         this.stats.totalDuration += duration - req.duration;
       }
       req.duration = duration;
-      this.render(); // Immediate render for errors
+      this.throttledRender();
     }
   }
 
@@ -309,10 +346,11 @@ export class TUI {
     return Math.max(1, this.term.height - 7); // Header (4 lines) + Footer (2 lines) + border
   }
 
-  private render(): void {
+  private doRender(): void {
     if (!this.term) return;
 
-    this.term.clear();
+    // Move to top-left instead of clear() - much faster
+    this.term.moveTo(1, 1);
 
     const width = this.term.width;
 
@@ -343,19 +381,24 @@ export class TUI {
     if (this.publicUrl) {
       this.term.white("Forwarding: ");
       this.term.green(this.publicUrl);
+      this.term.eraseLine();
       this.term.moveTo(1, 3);
       this.term.white("         -> ");
       this.term.yellow(`http://localhost:${this.localPort}`);
+      this.term.eraseLine();
     } else if (this.errorMessage) {
       this.term.bgRed.white(` ERROR: ${this.errorMessage} `);
+      this.term.eraseLine();
     } else {
       this.term.gray("Connecting...");
+      this.term.eraseLine();
     }
 
     // Error message (also show if connected but error occurred)
     if (this.errorMessage && this.publicUrl) {
       this.term.moveTo(1, 3);
       this.term.bgRed.white(` ERROR: ${this.errorMessage} `);
+      this.term.eraseLine();
     }
 
     // Separator
@@ -447,8 +490,9 @@ export class TUI {
       }
       this.term(" ");
 
-      // Path
+      // Path + clear rest of line
       this.term.white(path);
+      this.term.eraseLine(); // Clear any leftover characters from previous longer path
     }
 
     // === Footer ===
