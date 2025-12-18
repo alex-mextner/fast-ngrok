@@ -16,6 +16,7 @@
 	"scripts": {
 		"server": "bun run src/server/index.ts",
 		"dev": "bun --hot src/server/index.ts",
+		"prepublishOnly": "cd src/cli/tui-zig && ./build-all.sh",
 		"deploy": "npm version patch && npm publish && git push && echo \"wait for publishing...\" && sleep 10 && bun update --global fast-ngrok && fast-ngrok --version && ssh root@104.248.84.190 '/root/.bun/bin/bun update --global fast-ngrok && export PATH=\"/root/.bun/bin:$PATH\" && /root/.bun/bin/fast-ngrok update-service'"
 	},
 	"devDependencies": {
