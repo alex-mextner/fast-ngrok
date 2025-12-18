@@ -10,8 +10,14 @@ const C_RED: Color = .{ .index = 1 };
 const C_GREEN: Color = .{ .index = 2 };
 const C_YELLOW: Color = .{ .index = 3 };
 const C_BLUE: Color = .{ .index = 4 };
+const C_MAGENTA: Color = .{ .index = 5 };
 const C_CYAN: Color = .{ .index = 6 };
 const C_WHITE: Color = .{ .index = 7 };
+
+// Connection types
+const CONN_HTTP: u8 = 0;
+const CONN_WS: u8 = 1;
+const CONN_SSE: u8 = 2;
 
 // ============================================================================
 // Shared State - written by Bun, read by Zig TUI thread
@@ -209,6 +215,10 @@ const App = struct {
     }
 
     fn drawRequest(self: *App, win: vaxis.Window, row: u16, req: *const Request, buf_idx: u32) void {
+        const is_ws = req.connection_type == CONN_WS;
+        const is_sse = req.connection_type == CONN_SSE;
+        const is_long_lived = is_ws or is_sse;
+
         // Method (with bounds check)
         const method_len = @min(req.method_len, MAX_METHOD_LEN);
         const method = if (method_len > 0) req.method[0..method_len] else "???";
@@ -225,8 +235,26 @@ const App = struct {
 
         _ = win.printSegment(.{ .text = method, .style = .{ .fg = method_color } }, .{ .row_offset = row, .col_offset = 0 });
 
-        // Status
-        if (req.status > 0) {
+        // Status column - different handling for WS/SSE
+        if (is_long_lived) {
+            const prefix = if (is_ws) "WS " else "SSE";
+            if (req.status > 0) {
+                // Completed WS/SSE
+                if (req.is_error) {
+                    _ = win.printSegment(.{ .text = prefix, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = 8 });
+                    _ = win.printSegment(.{ .text = " ERR", .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = 11 });
+                } else {
+                    _ = win.printSegment(.{ .text = prefix, .style = .{ .fg = C_GREEN } }, .{ .row_offset = row, .col_offset = 8 });
+                    _ = win.printSegment(.{ .text = " END", .style = .{ .fg = C_GREEN } }, .{ .row_offset = row, .col_offset = 11 });
+                }
+            } else {
+                // Active WS/SSE - show with activity dot
+                _ = win.printSegment(.{ .text = prefix, .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 8 });
+                _ = win.printSegment(.{ .text = "  \xc2\xb7", .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 11 }); // · (middle dot)
+            }
+        } else if (req.is_error) {
+            _ = win.printSegment(.{ .text = "ERR", .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = 8 });
+        } else if (req.status > 0) {
             const status_color: Color = if (req.status < 300)
                 C_GREEN
             else if (req.status < 400)
@@ -243,14 +271,17 @@ const App = struct {
             _ = win.printSegment(.{ .text = "...", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = 8 });
         }
 
-        // Duration - use persistent buffer
-        if (req.duration_ms > 0) {
+        // Time column - different handling for WS/SSE and LOCAL
+        if (req.is_local) {
+            _ = win.printSegment(.{ .text = "LOCAL", .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 16 });
+        } else if (!is_long_lived and req.duration_ms > 0) {
             const time_str = if (req.duration_ms < 1000)
                 std.fmt.bufPrint(&self.time_bufs[buf_idx], "{d}ms", .{req.duration_ms}) catch "?"
             else
                 std.fmt.bufPrint(&self.time_bufs[buf_idx], "{d}s", .{req.duration_ms / 1000}) catch "?";
             _ = win.printSegment(.{ .text = time_str, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row, .col_offset = 16 });
         }
+        // WS/SSE don't show duration
 
         // Path (with bounds check)
         const path_len = @min(req.path_len, MAX_PATH_LEN);
