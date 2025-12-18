@@ -25,7 +25,5 @@
 	"peerDependencies": {
 		"typescript": "^5"
 	},
-	"dependencies": {
-		"terminal-kit": "^3.1.2"
-	}
+	"dependencies": {}
 }

@@ -189,6 +189,15 @@ const App = struct {
             const local = std.fmt.bufPrint(&self.local_url_buf, "http://localhost:{d}", .{self.state.local_port}) catch "localhost";
             _ = win.printSegment(.{ .text = "         -> " }, .{ .row_offset = row.*, .col_offset = 0 });
             _ = win.printSegment(.{ .text = local, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row.*, .col_offset = 12 });
+            row.* += 1;
+
+            // Error on separate row (under -> localhost)
+            if (self.state.error_len > 0) {
+                const err_len = @min(self.state.error_len, MAX_ERROR_LEN);
+                const err = self.state.error_message[0..err_len];
+                _ = win.printSegment(.{ .text = "ERROR: ", .style = .{ .fg = C_WHITE, .bg = C_RED } }, .{ .row_offset = row.*, .col_offset = 0 });
+                _ = win.printSegment(.{ .text = err, .style = .{ .fg = C_WHITE, .bg = C_RED } }, .{ .row_offset = row.*, .col_offset = 7 });
+            }
         } else if (self.state.error_len > 0) {
             const err_len = @min(self.state.error_len, MAX_ERROR_LEN);
             const err = self.state.error_message[0..err_len];
@@ -227,11 +236,11 @@ const App = struct {
             const req = &self.state.requests[idx];
             // Pass visual index for buffer allocation (max 20 visible)
             const vis_idx = @min(i, 19);
-            self.drawRequest(win, row.* + @as(u16, @intCast(i)), req, vis_idx);
+            self.drawRequest(win, row.* + @as(u16, @intCast(i)), req, vis_idx, win.width);
         }
     }
 
-    fn drawRequest(self: *App, win: vaxis.Window, row: u16, req: *const Request, buf_idx: u32) void {
+    fn drawRequest(self: *App, win: vaxis.Window, row: u16, req: *const Request, buf_idx: u32, term_width: u16) void {
         const is_ws = req.connection_type == CONN_WS;
         const is_sse = req.connection_type == CONN_SSE;
         const is_long_lived = is_ws or is_sse;
@@ -301,11 +310,12 @@ const App = struct {
         }
         // WS/SSE don't show duration
 
-        // Path (with bounds check)
+        // Path (with bounds check, dynamic width based on terminal)
         const path_len = @min(req.path_len, MAX_PATH_LEN);
         if (path_len > 0) {
             const path = req.path[0..path_len];
-            const max_path: u16 = 60;
+            // PATH column starts at 24, leave 1 char margin
+            const max_path: u16 = if (term_width > 25) term_width - 25 else 20;
             const truncated = if (path_len > max_path) path[0..max_path] else path;
             _ = win.printSegment(.{ .text = truncated }, .{ .row_offset = row, .col_offset = 24 });
         }

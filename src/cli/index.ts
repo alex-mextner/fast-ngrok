@@ -19,7 +19,6 @@ Commands:
 Options:
   --subdomain <name>   Use custom subdomain (e.g., --subdomain my-app)
   --no-local-shortcut  Disable local shortcut (macOS only)
-  --native-tui         Use native Zig TUI (experimental, fixes memory leaks)
 
 Usage:
   # 1. Setup server (on VPS)
@@ -51,7 +50,6 @@ async function main() {
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
       "no-local-shortcut": { type: "boolean" },
-      "native-tui": { type: "boolean" },
       subdomain: { type: "string" },
     },
     allowPositionals: true,
@@ -77,7 +75,6 @@ async function main() {
       await httpCommand(positionals.slice(1), {
         noLocalShortcut: values["no-local-shortcut"] ?? false,
         subdomain: values.subdomain,
-        nativeTui: values["native-tui"] ?? false,
       });
       break;
 

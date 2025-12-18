@@ -1,7 +1,6 @@
 import { connect, type Socket } from "node:net";
 import { getConfig, saveConfig } from "../config.ts";
 import { TunnelClient } from "../tunnel-client.ts";
-import { TUI } from "../tui/index.ts";
 import { ZigTUI } from "../tui-zig/ffi.ts";
 import {
   LocalShortcut,
@@ -10,9 +9,6 @@ import {
   removeAllHostsEntries,
   type PreSetupResult,
 } from "../local-shortcut/index.ts";
-
-// Common TUI interface
-type ITUI = TUI | ZigTUI;
 
 async function isPortListening(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -39,7 +35,6 @@ async function isPortListening(port: number): Promise<boolean> {
 export interface HttpCommandOptions {
   noLocalShortcut: boolean;
   subdomain?: string;
-  nativeTui: boolean;
 }
 
 export async function httpCommand(
@@ -115,7 +110,7 @@ export async function httpCommand(
     }
   }
 
-  const tui: ITUI = options.nativeTui ? new ZigTUI(port) : new TUI(port);
+  const tui = new ZigTUI(port);
 
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
