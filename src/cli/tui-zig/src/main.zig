@@ -102,11 +102,13 @@ const App = struct {
     }
 
     pub fn handleKey(self: *App, key: vaxis.Key) void {
-        if (key.matches('c', .{ .ctrl = true }) or key.matches('q', .{})) {
+        // Support both English and Russian keyboard layouts
+        // q/й = quit, k/л = up, j/о = down
+        if (key.matches('c', .{ .ctrl = true }) or key.matches('q', .{}) or key.matches(0x439, .{})) { // й
             self.should_quit = true;
-        } else if (key.matches(vaxis.Key.up, .{}) or key.matches('k', .{})) {
+        } else if (key.matches(vaxis.Key.up, .{}) or key.matches('k', .{}) or key.matches(0x43B, .{})) { // л
             if (self.scroll_offset > 0) self.scroll_offset -= 1;
-        } else if (key.matches(vaxis.Key.down, .{}) or key.matches('j', .{})) {
+        } else if (key.matches(vaxis.Key.down, .{}) or key.matches('j', .{}) or key.matches(0x43E, .{})) { // о
             self.scroll_offset += 1;
         }
     }
@@ -378,6 +380,9 @@ fn tuiThreadMain(state: *State) void {
         // Sleep ~60fps
         std.Thread.sleep(16 * std.time.ns_per_ms);
     }
+
+    // Signal that TUI has stopped (for tui_is_running check)
+    should_stop.store(true, .release);
 }
 
 // ============================================================================
