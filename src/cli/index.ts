@@ -12,7 +12,7 @@ fast-ngrok - Simple tunnel to localhost
 Commands:
   init-server     Setup server (VPS, requires sudo)
   update-server   Update systemd service and Caddyfile (VPS, requires sudo)
-  server          Run tunnel server daemon (VPS)
+  server          Run tunnel server daemon (auto-started by systemd after init-server)
   auth            Configure credentials (client)
   http <port>     Start tunnel to local server (client)
 

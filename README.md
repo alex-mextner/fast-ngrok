@@ -53,7 +53,7 @@ bunx fast-ngrok http 3000
 | Command | Description |
 |---------|-------------|
 | `fast-ngrok init-server` | Setup server (VPS, requires sudo) |
-| `fast-ngrok server` | Run tunnel server daemon |
+| `fast-ngrok server` | Run tunnel server daemon (auto-started by systemd after init-server) |
 | `fast-ngrok auth` | Configure server URL and API key |
 | `fast-ngrok http <port>` | Expose local HTTP server |
 
