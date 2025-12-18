@@ -12,7 +12,8 @@
       "Bash(echo:*)",
       "Bash(ssh root@104.248.84.190 \"cat /etc/caddy/Caddyfile\")",
       "Bash(ssh root@104.248.84.190:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(zig build:*)"
     ]
   }
 }

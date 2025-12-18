@@ -46,6 +46,9 @@ export class TUI {
   private lastRenderTime = 0;
   private renderThrottleMs = 100;
   private pendingRenderTimeout: Timer | null = null;
+  // Full clear counter - do full clear every N renders to prevent terminal-kit memory buildup
+  private renderCount = 0;
+  private fullClearEvery = 100; // Full clear every 100 renders (~10 seconds at 10fps)
 
   constructor(private localPort: number) {}
 
@@ -349,8 +352,16 @@ export class TUI {
   private doRender(): void {
     if (!this.term) return;
 
-    // Move to top-left instead of clear() - much faster
-    this.term.moveTo(1, 1);
+    this.renderCount++;
+
+    // Full clear periodically to prevent terminal-kit memory buildup
+    // First render (renderCount=1) always does full clear
+    if (this.renderCount === 1 || this.renderCount % this.fullClearEvery === 0) {
+      this.term.clear();
+    } else {
+      // Just move to top-left - faster than clear
+      this.term.moveTo(1, 1);
+    }
 
     const width = this.term.width;
 

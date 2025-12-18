@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+zig-out
 
 # code coverage
 coverage
@@ -26,6 +27,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 *.tsbuildinfo
+.zig-cache
 
 # IntelliJ based IDEs
 .idea
