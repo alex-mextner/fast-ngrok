@@ -1,6 +1,6 @@
 {
 	"name": "fast-ngrok",
-	"version": "0.2.52",
+	"version": "0.2.53",
 	"type": "module",
 	"repository": {
 		"type": "git",
