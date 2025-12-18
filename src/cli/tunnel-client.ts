@@ -140,6 +140,15 @@ export class TunnelClient {
   // Minimum size to compress (1KB)
   private static COMPRESS_THRESHOLD = 1024;
 
+  // SSE detection helpers
+  private isSSE(contentType: string, headers: Record<string, string>): boolean {
+    // Primary: Content-Type header
+    if (contentType.includes("text/event-stream")) return true;
+    // Secondary: X-Accel-Buffering: no (nginx-style hint)
+    if (headers["x-accel-buffering"]?.toLowerCase() === "no") return true;
+    return false;
+  }
+
   private async handleRequest(message: Extract<ServerMessage, { type: "http_request" }>): Promise<void> {
     const startTime = Date.now();
     const connectionType = this.detectConnectionType(message.headers, message.path);
@@ -228,7 +237,10 @@ export class TunnelClient {
         return;
       }
 
-      if (isSmall) {
+      // SSE: stream immediately without buffering (ignore content-length)
+      if (this.isSSE(contentType, responseHeaders)) {
+        await this.streamSSE(message.requestId, response, responseHeaders, startTime);
+      } else if (isSmall) {
         // Small response - buffer and optionally compress
         await this.sendBufferedResponse(message, response, responseHeaders, startTime);
       } else if (isLarge) {
@@ -315,6 +327,82 @@ export class TunnelClient {
     } catch (error) {
       // Stream error
       const errMsg = error instanceof Error ? error.message : "Stream error";
+      const errorMsgProto: ClientMessage = {
+        type: "http_response_stream_error",
+        requestId,
+        error: errMsg,
+      };
+      this.ws?.send(JSON.stringify(errorMsgProto));
+
+      const duration = Date.now() - startTime;
+      this.options.onRequestError?.(requestId, errMsg, duration);
+      this.options.onResponse?.(requestId, 502, duration, true);
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  // SSE streaming - stream data immediately without buffering
+  // Unlike regular streaming, SSE has no known size and may run for hours
+  private async streamSSE(
+    requestId: string,
+    response: Response,
+    headers: Record<string, string>,
+    startTime: number
+  ): Promise<void> {
+    // Remove headers that don't apply to streaming
+    delete headers["content-length"];
+    delete headers["content-encoding"];
+    delete headers["transfer-encoding"];
+
+    // Send stream start (no totalSize - SSE is unbounded)
+    const startMsg: ClientMessage = {
+      type: "http_response_stream_start",
+      requestId,
+      status: response.status,
+      headers,
+    };
+    this.ws!.send(JSON.stringify(startMsg));
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
+      this.ws!.send(JSON.stringify(endMsg));
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
+      return;
+    }
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+          throw new Error("WebSocket disconnected during SSE streaming");
+        }
+
+        // Send chunk immediately - no buffering for SSE
+        const chunkMsg: ClientMessage = {
+          type: "http_response_stream_chunk",
+          requestId,
+          chunkSize: value.length,
+        };
+        this.ws.send(JSON.stringify(chunkMsg));
+        this.ws.send(value);
+
+        // Activity indicator
+        this.options.onActivity?.(requestId, 'out');
+      }
+
+      // Stream ended normally (server closed SSE connection)
+      const endMsg: ClientMessage = { type: "http_response_stream_end", requestId };
+      this.ws!.send(JSON.stringify(endMsg));
+
+      const duration = Date.now() - startTime;
+      this.options.onResponse?.(requestId, response.status, duration, false);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "SSE stream error";
       const errorMsgProto: ClientMessage = {
         type: "http_response_stream_error",
         requestId,
