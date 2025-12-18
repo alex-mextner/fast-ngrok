@@ -3,9 +3,48 @@
  * Shared memory communication with Zig thread for zero-copy rendering
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { dlopen, FFIType } from "bun:ffi";
-import { join } from "path";
+
 import type { RequestInfo } from "../../shared/types.ts";
+
+// Determine library path based on platform
+function getLibPath(): string {
+  const arch = process.arch; // arm64, x64
+  const platform = process.platform; // darwin, linux
+
+  let libName: string;
+  let platformDir: string;
+
+  if (platform === "darwin") {
+    libName = "libtui.dylib";
+    platformDir = arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+  } else if (platform === "linux") {
+    libName = "libtui.so";
+    platformDir = "linux-x64";
+  } else {
+    throw new Error(`Unsupported platform: ${platform}`);
+  }
+
+  // Try platform-specific prebuilt first
+  const prebuiltPath = join(import.meta.dir, "lib", platformDir, libName);
+  if (existsSync(prebuiltPath)) {
+    return prebuiltPath;
+  }
+
+  // Fallback to zig-out (dev mode)
+  const devPath = join(import.meta.dir, "zig-out/lib", libName);
+  if (existsSync(devPath)) {
+    return devPath;
+  }
+
+  throw new Error(
+    `Native TUI library not found. Expected at:\n  ${prebuiltPath}\n  ${devPath}\n` +
+    `Run 'zig build' in src/cli/tui-zig/ or use terminal-kit TUI instead.`
+  );
+}
 
 // Constants must match main.zig
 const MAX_REQUESTS = 100;
@@ -20,9 +59,7 @@ const CONN_WS = 1;
 const CONN_SSE = 2;
 
 // Load the dynamic library
-const libPath = join(import.meta.dir, "zig-out/lib/libtui.dylib");
-
-const lib = dlopen(libPath, {
+const lib = dlopen(getLibPath(), {
   tui_init: {
     args: [FFIType.ptr],
     returns: FFIType.bool,

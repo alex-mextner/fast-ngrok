@@ -7,9 +7,6 @@ dist
 *.tgz
 zig-out
 
-# prebuilt native binaries (included in npm via .npmignore)
-src/cli/tui-zig/lib/
-
 # code coverage
 coverage
 *.lcov
@@ -37,3 +34,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Zig source and build files (lib/ binaries ARE included)
+src/cli/tui-zig/src/
+src/cli/tui-zig/build.zig
+src/cli/tui-zig/build.zig.zon
+src/cli/tui-zig/build-all.sh
+src/cli/tui-zig/test-*.ts
