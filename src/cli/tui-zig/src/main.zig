@@ -76,7 +76,11 @@ const App = struct {
 
     // Persistent buffers for formatted strings (vaxis stores slice refs)
     local_url_buf: [32]u8,
-    stats_buf: [64]u8,
+    // Stats buffers (separate for colors)
+    stats_total_buf: [16]u8,
+    stats_2xx_buf: [12]u8,
+    stats_4xx_buf: [12]u8,
+    stats_5xx_buf: [12]u8,
     // Per-request buffers (for visible requests only)
     status_bufs: [20][8]u8,
     time_bufs: [20][16]u8,
@@ -88,7 +92,10 @@ const App = struct {
             .scroll_offset = 0,
             .should_quit = false,
             .local_url_buf = .{0} ** 32,
-            .stats_buf = .{0} ** 64,
+            .stats_total_buf = .{0} ** 16,
+            .stats_2xx_buf = .{0} ** 12,
+            .stats_4xx_buf = .{0} ** 12,
+            .stats_5xx_buf = .{0} ** 12,
             .status_bufs = .{.{0} ** 8} ** 20,
             .time_bufs = .{.{0} ** 16} ** 20,
         };
@@ -254,13 +261,35 @@ const App = struct {
     }
 
     fn drawStats(self: *App, win: vaxis.Window, row: u16) void {
-        // Format entire stats line into persistent buffer
-        const stats = std.fmt.bufPrint(
-            &self.stats_buf,
-            "Requests: {d} | 2xx: {d} | 4xx: {d} | 5xx: {d}",
-            .{ self.state.stats_total, self.state.stats_2xx, self.state.stats_4xx, self.state.stats_5xx },
-        ) catch "Stats error";
-        _ = win.printSegment(.{ .text = stats }, .{ .row_offset = row, .col_offset = 0 });
+        var col: u16 = 0;
+
+        // Total requests
+        const total = std.fmt.bufPrint(&self.stats_total_buf, "Requests: {d}", .{self.state.stats_total}) catch "?";
+        _ = win.printSegment(.{ .text = total }, .{ .row_offset = row, .col_offset = col });
+        col += @intCast(total.len);
+
+        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
+        col += 3;
+
+        // 2xx (green)
+        const s2xx = std.fmt.bufPrint(&self.stats_2xx_buf, "2xx: {d}", .{self.state.stats_2xx}) catch "?";
+        _ = win.printSegment(.{ .text = s2xx, .style = .{ .fg = C_GREEN } }, .{ .row_offset = row, .col_offset = col });
+        col += @intCast(s2xx.len);
+
+        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
+        col += 3;
+
+        // 4xx (yellow)
+        const s4xx = std.fmt.bufPrint(&self.stats_4xx_buf, "4xx: {d}", .{self.state.stats_4xx}) catch "?";
+        _ = win.printSegment(.{ .text = s4xx, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row, .col_offset = col });
+        col += @intCast(s4xx.len);
+
+        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
+        col += 3;
+
+        // 5xx (red)
+        const s5xx = std.fmt.bufPrint(&self.stats_5xx_buf, "5xx: {d}", .{self.state.stats_5xx}) catch "?";
+        _ = win.printSegment(.{ .text = s5xx, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = col });
     }
 };
 
