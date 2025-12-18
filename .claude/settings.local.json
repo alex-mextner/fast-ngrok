@@ -17,7 +17,8 @@
       "Bash(chmod:*)",
       "Bash(./build-all.sh)",
       "Bash(du:*)",
-      "Bash(npm pack:*)"
+      "Bash(npm pack:*)",
+      "Bash(grep:*)"
     ]
   }
 }

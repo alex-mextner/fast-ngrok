@@ -74,12 +74,23 @@ const App = struct {
     scroll_offset: u32,
     should_quit: bool,
 
+    // Persistent buffers for formatted strings (vaxis stores slice refs)
+    local_url_buf: [32]u8,
+    stats_buf: [64]u8,
+    // Per-request buffers (for visible requests only)
+    status_bufs: [20][8]u8,
+    time_bufs: [20][16]u8,
+
     pub fn init(state: *State) App {
         return .{
             .state = state,
             .last_version = 0,
             .scroll_offset = 0,
             .should_quit = false,
+            .local_url_buf = .{0} ** 32,
+            .stats_buf = .{0} ** 64,
+            .status_bufs = .{.{0} ** 8} ** 20,
+            .time_bufs = .{.{0} ** 16} ** 20,
         };
     }
 
@@ -134,19 +145,21 @@ const App = struct {
         }
         row.* += 1;
 
-        // URL
-        if (self.state.public_url_len > 0) {
-            const url = self.state.public_url[0..self.state.public_url_len];
+        // URL (with bounds check)
+        const url_len = @min(self.state.public_url_len, MAX_URL_LEN);
+        if (url_len > 0) {
+            const url = self.state.public_url[0..url_len];
             _ = win.printSegment(.{ .text = "Forwarding: " }, .{ .row_offset = row.*, .col_offset = 0 });
             _ = win.printSegment(.{ .text = url, .style = .{ .fg = C_GREEN } }, .{ .row_offset = row.*, .col_offset = 12 });
             row.* += 1;
 
-            var buf: [32]u8 = undefined;
-            const local = std.fmt.bufPrint(&buf, "http://localhost:{d}", .{self.state.local_port}) catch "localhost";
+            // Use persistent buffer for formatted URL
+            const local = std.fmt.bufPrint(&self.local_url_buf, "http://localhost:{d}", .{self.state.local_port}) catch "localhost";
             _ = win.printSegment(.{ .text = "         -> " }, .{ .row_offset = row.*, .col_offset = 0 });
             _ = win.printSegment(.{ .text = local, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row.*, .col_offset = 12 });
         } else if (self.state.error_len > 0) {
-            const err = self.state.error_message[0..self.state.error_len];
+            const err_len = @min(self.state.error_len, MAX_ERROR_LEN);
+            const err = self.state.error_message[0..err_len];
             _ = win.printSegment(.{ .text = "ERROR: ", .style = .{ .fg = C_WHITE, .bg = C_RED } }, .{ .row_offset = row.*, .col_offset = 0 });
             _ = win.printSegment(.{ .text = err, .style = .{ .fg = C_WHITE, .bg = C_RED } }, .{ .row_offset = row.*, .col_offset = 7 });
         } else {
@@ -180,13 +193,16 @@ const App = struct {
         while (i < height and i + self.scroll_offset < count) : (i += 1) {
             const idx = (self.state.request_head + MAX_REQUESTS - 1 - i - self.scroll_offset) % MAX_REQUESTS;
             const req = &self.state.requests[idx];
-            self.drawRequest(win, row.* + @as(u16, @intCast(i)), req);
+            // Pass visual index for buffer allocation (max 20 visible)
+            const vis_idx = @min(i, 19);
+            self.drawRequest(win, row.* + @as(u16, @intCast(i)), req, vis_idx);
         }
     }
 
-    fn drawRequest(_: *App, win: vaxis.Window, row: u16, req: *const Request) void {
-        // Method
-        const method = req.method[0..req.method_len];
+    fn drawRequest(self: *App, win: vaxis.Window, row: u16, req: *const Request, buf_idx: u32) void {
+        // Method (with bounds check)
+        const method_len = @min(req.method_len, MAX_METHOD_LEN);
+        const method = if (method_len > 0) req.method[0..method_len] else "???";
         const method_color: Color = if (std.mem.eql(u8, method, "GET"))
             C_GREEN
         else if (std.mem.eql(u8, method, "POST"))
@@ -211,57 +227,40 @@ const App = struct {
             else
                 C_RED;
 
-            var status_buf: [8]u8 = undefined;
-            const status_str = std.fmt.bufPrint(&status_buf, "{d}", .{req.status}) catch "?";
+            // Use persistent buffer indexed by visual row
+            const status_str = std.fmt.bufPrint(&self.status_bufs[buf_idx], "{d}", .{req.status}) catch "?";
             _ = win.printSegment(.{ .text = status_str, .style = .{ .fg = status_color } }, .{ .row_offset = row, .col_offset = 8 });
         } else {
             _ = win.printSegment(.{ .text = "...", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = 8 });
         }
 
-        // Duration
+        // Duration - use persistent buffer
         if (req.duration_ms > 0) {
-            var time_buf: [16]u8 = undefined;
             const time_str = if (req.duration_ms < 1000)
-                std.fmt.bufPrint(&time_buf, "{d}ms", .{req.duration_ms}) catch "?"
+                std.fmt.bufPrint(&self.time_bufs[buf_idx], "{d}ms", .{req.duration_ms}) catch "?"
             else
-                std.fmt.bufPrint(&time_buf, "{d}s", .{req.duration_ms / 1000}) catch "?";
+                std.fmt.bufPrint(&self.time_bufs[buf_idx], "{d}s", .{req.duration_ms / 1000}) catch "?";
             _ = win.printSegment(.{ .text = time_str, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row, .col_offset = 16 });
         }
 
-        // Path
-        const path = req.path[0..req.path_len];
-        const max_path: u16 = 60;
-        const truncated = if (req.path_len > max_path) path[0..max_path] else path;
-        _ = win.printSegment(.{ .text = truncated }, .{ .row_offset = row, .col_offset = 24 });
+        // Path (with bounds check)
+        const path_len = @min(req.path_len, MAX_PATH_LEN);
+        if (path_len > 0) {
+            const path = req.path[0..path_len];
+            const max_path: u16 = 60;
+            const truncated = if (path_len > max_path) path[0..max_path] else path;
+            _ = win.printSegment(.{ .text = truncated }, .{ .row_offset = row, .col_offset = 24 });
+        }
     }
 
     fn drawStats(self: *App, win: vaxis.Window, row: u16) void {
-        var col: u16 = 0;
-        var buf: [32]u8 = undefined;
-
-        const total = std.fmt.bufPrint(&buf, "Requests: {d}", .{self.state.stats_total}) catch "?";
-        _ = win.printSegment(.{ .text = total }, .{ .row_offset = row, .col_offset = col });
-        col += @intCast(total.len + 1);
-
-        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
-        col += 3;
-
-        const s2xx = std.fmt.bufPrint(&buf, "2xx: {d}", .{self.state.stats_2xx}) catch "?";
-        _ = win.printSegment(.{ .text = s2xx, .style = .{ .fg = C_GREEN } }, .{ .row_offset = row, .col_offset = col });
-        col += @intCast(s2xx.len);
-
-        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
-        col += 3;
-
-        const s4xx = std.fmt.bufPrint(&buf, "4xx: {d}", .{self.state.stats_4xx}) catch "?";
-        _ = win.printSegment(.{ .text = s4xx, .style = .{ .fg = C_YELLOW } }, .{ .row_offset = row, .col_offset = col });
-        col += @intCast(s4xx.len);
-
-        _ = win.printSegment(.{ .text = " | ", .style = .{ .dim = true } }, .{ .row_offset = row, .col_offset = col });
-        col += 3;
-
-        const s5xx = std.fmt.bufPrint(&buf, "5xx: {d}", .{self.state.stats_5xx}) catch "?";
-        _ = win.printSegment(.{ .text = s5xx, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = col });
+        // Format entire stats line into persistent buffer
+        const stats = std.fmt.bufPrint(
+            &self.stats_buf,
+            "Requests: {d} | 2xx: {d} | 4xx: {d} | 5xx: {d}",
+            .{ self.state.stats_total, self.state.stats_2xx, self.state.stats_4xx, self.state.stats_5xx },
+        ) catch "Stats error";
+        _ = win.printSegment(.{ .text = stats }, .{ .row_offset = row, .col_offset = 0 });
     }
 };
 
@@ -279,11 +278,16 @@ fn tuiThreadMain(state: *State) void {
     const allocator = gpa.allocator();
 
     // Buffer for TTY
-    var tty_buffer: [1024]u8 = undefined;
+    var tty_buffer: [1024]u8 = .{0} ** 1024;
 
     // Initialize TTY
     var tty = vaxis.Tty.init(&tty_buffer) catch return;
     defer tty.deinit();
+
+    // Set non-blocking mode for reads
+    var fl_flags = std.posix.fcntl(tty.fd, std.posix.F.GETFL, 0) catch return;
+    fl_flags |= 1 << @bitOffsetOf(std.posix.O, "NONBLOCK");
+    _ = std.posix.fcntl(tty.fd, std.posix.F.SETFL, fl_flags) catch return;
 
     // Initialize Vaxis
     var vx = vaxis.Vaxis.init(allocator, .{}) catch return;
@@ -301,10 +305,10 @@ fn tuiThreadMain(state: *State) void {
 
     // Parser for input
     var parser: vaxis.Parser = .{};
-    var read_buf: [256]u8 = undefined;
+    var read_buf: [256]u8 = .{0} ** 256;
 
     while (!should_stop.load(.acquire) and !app.should_quit) {
-        // Non-blocking read
+        // Non-blocking read (returns EAGAIN if no data)
         const n = tty.read(&read_buf) catch 0;
         if (n > 0) {
             var seq_start: usize = 0;
