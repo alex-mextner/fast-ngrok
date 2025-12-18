@@ -293,9 +293,15 @@ fn tuiThreadMain(state: *State) void {
     var vx = vaxis.Vaxis.init(allocator, .{}) catch return;
     defer vx.deinit(allocator, tty.writer());
 
-    // Enter alternate screen
-    vx.enterAltScreen(tty.writer()) catch return;
-    defer vx.exitAltScreen(tty.writer()) catch {};
+    // Enter alternate screen and hide cursor
+    const writer = tty.writer();
+    vx.enterAltScreen(writer) catch return;
+    _ = writer.write("\x1b[?25l") catch {}; // Hide cursor
+    defer {
+        // Restore cursor and exit alternate screen
+        _ = writer.write("\x1b[?25h") catch {}; // Show cursor
+        vx.exitAltScreen(writer) catch {};
+    }
 
     // Get initial size
     const winsize = vaxis.Tty.getWinsize(tty.fd) catch return;
