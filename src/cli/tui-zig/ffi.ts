@@ -91,6 +91,8 @@ const lib = dlopen(getLibPath(), {
   req_offset_is_error: { args: [], returns: FFIType.u64 },
   req_offset_is_local: { args: [], returns: FFIType.u64 },
   req_offset_conn_type: { args: [], returns: FFIType.u64 },
+  req_offset_last_incoming: { args: [], returns: FFIType.u64 },
+  req_offset_last_outgoing: { args: [], returns: FFIType.u64 },
   // State offsets
   state_offset_connected: { args: [], returns: FFIType.u64 },
   state_offset_reconnecting: { args: [], returns: FFIType.u64 },
@@ -127,6 +129,8 @@ const REQ = {
   is_error: Number(lib.symbols.req_offset_is_error()),
   is_local: Number(lib.symbols.req_offset_is_local()),
   conn_type: Number(lib.symbols.req_offset_conn_type()),
+  last_incoming: Number(lib.symbols.req_offset_last_incoming()),
+  last_outgoing: Number(lib.symbols.req_offset_last_outgoing()),
 };
 
 // State field offsets (from Zig)
@@ -368,8 +372,19 @@ export class ZigTUI {
     this.incrementVersion();
   }
 
-  updateActivity(_id: string, _direction: 'in' | 'out'): void {
-    // Activity arrows are rendered based on time - just trigger version bump
+  updateActivity(id: string, direction: 'in' | 'out'): void {
+    const mapping = this.requestsMap.get(id);
+    if (!mapping) return;
+
+    const reqOffset = STATE.requests + mapping.index * REQUEST_SIZE;
+    const now = BigInt(Date.now());
+
+    if (direction === 'in') {
+      this.stateView.setBigUint64(reqOffset + REQ.last_incoming, now, true);
+    } else {
+      this.stateView.setBigUint64(reqOffset + REQ.last_outgoing, now, true);
+    }
+
     this.incrementVersion();
   }
 

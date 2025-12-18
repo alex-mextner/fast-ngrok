@@ -19,6 +19,20 @@ const CONN_HTTP: u8 = 0;
 const CONN_WS: u8 = 1;
 const CONN_SSE: u8 = 2;
 
+// Activity window for WS/SSE arrows (1 second)
+const ACTIVITY_WINDOW_MS: i64 = 1000;
+
+fn getActivityArrow(req: *const Request) []const u8 {
+    const now = std.time.milliTimestamp();
+    const in_active = req.last_incoming > 0 and (now - @as(i64, @intCast(req.last_incoming))) < ACTIVITY_WINDOW_MS;
+    const out_active = req.last_outgoing > 0 and (now - @as(i64, @intCast(req.last_outgoing))) < ACTIVITY_WINDOW_MS;
+
+    if (in_active and out_active) return "\xe2\x86\x94"; // ↔
+    if (in_active) return "\xe2\x86\x92"; // →
+    if (out_active) return "\xe2\x86\x90"; // ←
+    return "\xc2\xb7"; // ·
+}
+
 // ============================================================================
 // Shared State - written by Bun, read by Zig TUI thread
 // ============================================================================
@@ -41,6 +55,9 @@ pub const Request = extern struct {
     is_local: bool,
     connection_type: u8,
     _padding: [5]u8,
+    // Activity timestamps for WS/SSE (milliseconds since epoch)
+    last_incoming: u64,
+    last_outgoing: u64,
 };
 
 pub const State = extern struct {
@@ -248,9 +265,10 @@ const App = struct {
                     _ = win.printSegment(.{ .text = " END", .style = .{ .fg = C_GREEN } }, .{ .row_offset = row, .col_offset = 11 });
                 }
             } else {
-                // Active WS/SSE - show with activity dot
+                // Active WS/SSE - show with activity arrow
                 _ = win.printSegment(.{ .text = prefix, .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 8 });
-                _ = win.printSegment(.{ .text = "  \xc2\xb7", .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 11 }); // · (middle dot)
+                const arrow = getActivityArrow(req);
+                _ = win.printSegment(.{ .text = arrow, .style = .{ .fg = C_MAGENTA } }, .{ .row_offset = row, .col_offset = 12 });
             }
         } else if (req.is_error) {
             _ = win.printSegment(.{ .text = "ERR", .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = 8 });
@@ -481,6 +499,12 @@ pub export fn req_offset_is_local() usize {
 }
 pub export fn req_offset_conn_type() usize {
     return @offsetOf(Request, "connection_type");
+}
+pub export fn req_offset_last_incoming() usize {
+    return @offsetOf(Request, "last_incoming");
+}
+pub export fn req_offset_last_outgoing() usize {
+    return @offsetOf(Request, "last_outgoing");
 }
 
 // State field offsets
