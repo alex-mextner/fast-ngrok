@@ -437,14 +437,9 @@ export class TunnelClient {
     if (response.status !== 304 && this.isCompressible(contentType)) {
       const compressed = await this.compressBody(bodyBytes, acceptEncoding);
       if (compressed) {
-        console.log(`[DEBUG] Compressed ${bodyBytes.length} -> ${compressed.data.length} (${compressed.encoding})`);
         bodyBytes = compressed.data;
         headers["content-encoding"] = compressed.encoding;
-      } else {
-        console.log(`[DEBUG] Compression failed or not supported for acceptEncoding: ${acceptEncoding}`);
       }
-    } else {
-      console.log(`[DEBUG] Skipping compression: status=${response.status}, compressible=${this.isCompressible(contentType)}`);
     }
 
     // Update content-length to actual size
