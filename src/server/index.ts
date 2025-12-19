@@ -2,7 +2,7 @@ import { getServerConfig } from "../shared/types.ts";
 import type { ServerMessage, ClientMessage } from "../shared/protocol.ts";
 import { verifyApiKey } from "./auth.ts";
 import { generateSubdomain } from "./subdomain.ts";
-import { tunnelManager, type TunnelData } from "./tunnel-manager.ts";
+import { tunnelManager, type WsData } from "./tunnel-manager.ts";
 import { CaddyApi } from "./caddy-api.ts";
 import { subdomainCache } from "./subdomain-cache.ts";
 
@@ -21,7 +21,7 @@ if (!caddyAvailable) {
   console.warn(`[server] Routes won't be automatically registered`);
 }
 
-Bun.serve<TunnelData>({
+Bun.serve<WsData>({
   port: config.tunnelPort,
   idleTimeout: 120, // 2 minutes for slow requests (compilation, large files, etc.)
 
@@ -83,7 +83,7 @@ Bun.serve<TunnelData>({
       }
 
       const upgraded = server.upgrade(req, {
-        data: { subdomain, apiKey },
+        data: { type: "tunnel" as const, subdomain, apiKey },
       });
 
       if (!upgraded) {
@@ -136,54 +136,115 @@ Bun.serve<TunnelData>({
       return new Response("Tunnel not found", { status: 404 });
     }
 
+    // WebSocket passthrough: handle browser WS upgrade
+    if (tunnelManager.isWebSocketUpgrade(req)) {
+      const url = new URL(req.url);
+      const headers: Record<string, string> = {};
+      req.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+      const protocol = req.headers.get("sec-websocket-protocol") ?? undefined;
+
+      try {
+        // Ask client to open WS to localhost, get wsId back
+        const wsId = await tunnelManager.initiateWsUpgrade(
+          subdomain,
+          url.pathname + url.search,
+          headers,
+          protocol
+        );
+
+        // Client confirmed - upgrade browser connection
+        const upgraded = server.upgrade(req, {
+          data: { type: "browser" as const, wsId, subdomain },
+        });
+
+        if (!upgraded) {
+          return new Response("WebSocket upgrade failed", { status: 500 });
+        }
+
+        return undefined;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "WS upgrade failed";
+        return new Response(message, { status: 502 });
+      }
+    }
+
     return tunnelManager.proxyRequest(subdomain, req);
   },
 
   websocket: {
     open(ws) {
-      const { subdomain, apiKey } = ws.data;
-      tunnelManager.register(subdomain, ws, apiKey);
+      if (ws.data.type === "tunnel") {
+        const { subdomain, apiKey } = ws.data;
+        tunnelManager.register(subdomain, ws as any, apiKey);
 
-      // No need to register individual routes in Caddy - wildcard *.tunnel.domain handles all
-      // Adding routes via Admin API causes Caddy to reload, which closes WebSocket connections!
-
-      // Send connection confirmation
-      const message: ServerMessage = {
-        type: "connected",
-        subdomain,
-        publicUrl: `https://${subdomain}.${config.baseDomain}`,
-      };
-      ws.send(JSON.stringify(message));
+        // Send connection confirmation
+        const message: ServerMessage = {
+          type: "connected",
+          subdomain,
+          publicUrl: `https://${subdomain}.${config.baseDomain}`,
+        };
+        ws.send(JSON.stringify(message));
+      } else if (ws.data.type === "browser") {
+        const { wsId, subdomain } = ws.data;
+        tunnelManager.registerBrowserWs(subdomain, wsId, ws as any);
+      }
     },
 
     message(ws, message) {
-      const { subdomain } = ws.data;
+      if (ws.data.type === "tunnel") {
+        const { subdomain } = ws.data;
 
-      // Binary frame = body for previous http_response_binary header
-      if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
-        const data = message instanceof ArrayBuffer ? new Uint8Array(message) : message;
-        tunnelManager.handleBinaryMessage(subdomain, data);
-        return;
-      }
-
-      // Text frame = JSON message
-      try {
-        const parsed = JSON.parse(message.toString()) as ClientMessage;
-
-        if (parsed.type === "pong") {
+        // Binary frame = body for previous http_response_binary header
+        if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
+          const data = message instanceof ArrayBuffer ? new Uint8Array(message) : message;
+          tunnelManager.handleBinaryMessage(subdomain, data);
           return;
         }
 
-        tunnelManager.handleResponse(subdomain, parsed);
-      } catch (error) {
-        console.error("[ws] Failed to parse message:", error);
+        // Text frame = JSON message
+        try {
+          const parsed = JSON.parse(message.toString()) as ClientMessage;
+
+          if (parsed.type === "pong") {
+            return;
+          }
+
+          // Check if it's a WS-related message
+          if (parsed.type === "ws_opened" || parsed.type === "ws_error" ||
+              parsed.type === "ws_message" || parsed.type === "ws_message_binary" ||
+              parsed.type === "ws_close") {
+            tunnelManager.handleWsResponse(subdomain, parsed);
+            return;
+          }
+
+          tunnelManager.handleResponse(subdomain, parsed);
+        } catch (error) {
+          console.error("[ws] Failed to parse message:", error);
+        }
+      } else if (ws.data.type === "browser") {
+        // Browser WS message - forward to client
+        const { wsId, subdomain } = ws.data;
+        if (message instanceof ArrayBuffer) {
+          tunnelManager.forwardBrowserWsMessage(subdomain, wsId, message);
+        } else if (message instanceof Uint8Array) {
+          tunnelManager.forwardBrowserWsMessage(subdomain, wsId, message.buffer as ArrayBuffer);
+        } else {
+          tunnelManager.forwardBrowserWsMessage(subdomain, wsId, message.toString());
+        }
       }
     },
 
-    close(ws) {
-      const { subdomain } = ws.data;
-      tunnelManager.unregister(subdomain);
-      // No Caddy route cleanup needed - using wildcard
+    close(ws, code, reason) {
+      if (ws.data.type === "tunnel") {
+        const { subdomain } = ws.data;
+        tunnelManager.unregister(subdomain);
+      } else if (ws.data.type === "browser") {
+        const { wsId, subdomain } = ws.data;
+        tunnelManager.unregisterBrowserWs(subdomain, wsId);
+        tunnelManager.notifyBrowserWsClosed(subdomain, wsId, code, reason);
+      }
     },
 
     // Heartbeat to keep connection alive

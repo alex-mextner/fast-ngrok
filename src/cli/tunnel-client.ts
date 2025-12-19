@@ -29,6 +29,10 @@ export class TunnelClient {
   private hasConnectedOnce = false; // Only reconnect if we connected at least once
   private pingInterval: Timer | null = null;
   private currentSubdomain: string | null = null; // Preserve across reconnects
+  // WebSocket passthrough: local WS connections to localhost
+  private localWebSockets = new Map<string, WebSocket>();
+  // WebSocket passthrough: pending binary message wsId
+  private pendingWsBinaryWsId: string | null = null;
 
   constructor(private options: TunnelClientOptions) {
     this.localProxy = new LocalProxy(options.localPort);
@@ -68,6 +72,16 @@ export class TunnelClient {
 
       this.ws.addEventListener("message", async (event) => {
         try {
+          // Handle binary frames for WS passthrough
+          if (event.data instanceof ArrayBuffer) {
+            this.handleBinaryFrame(new Uint8Array(event.data));
+            return;
+          }
+          if (event.data instanceof Blob) {
+            const buffer = await event.data.arrayBuffer();
+            this.handleBinaryFrame(new Uint8Array(buffer));
+            return;
+          }
           await this.handleMessage(event.data.toString());
         } catch (error) {
           console.error("[ws] Message handling error:", error);
@@ -77,6 +91,7 @@ export class TunnelClient {
       this.ws.addEventListener("close", (event) => {
         console.error(`[ws] Connection closed: code=${event.code}, reason=${event.reason}`);
         this.stopPingInterval();
+        this.closeAllLocalWebSockets();
         this.options.onDisconnect?.();
 
         // Only reconnect if we successfully connected at least once
@@ -95,6 +110,7 @@ export class TunnelClient {
   disconnect(): void {
     this.shouldReconnect = false;
     this.stopPingInterval();
+    this.closeAllLocalWebSockets();
     this.ws?.close();
   }
 
@@ -111,6 +127,23 @@ export class TunnelClient {
 
         case "http_request":
           await this.handleRequest(message);
+          break;
+
+        case "ws_open":
+          this.handleWsOpen(message);
+          break;
+
+        case "ws_message":
+          this.handleWsMessage(message);
+          break;
+
+        case "ws_message_binary":
+          // Next binary frame is for this wsId
+          this.pendingWsBinaryWsId = message.wsId;
+          break;
+
+        case "ws_close":
+          this.handleWsClose(message);
           break;
 
         case "request_timing":
@@ -634,6 +667,133 @@ export class TunnelClient {
 
     this.ws?.send(JSON.stringify(clientMessage));
     this.options.onResponse?.(requestId, 502, duration, true);
+  }
+
+  // WebSocket passthrough: handle ws_open from server
+  private handleWsOpen(message: Extract<ServerMessage, { type: "ws_open" }>): void {
+    const { wsId, path, protocol } = message;
+
+    try {
+      const wsUrl = `ws://localhost:${this.options.localPort}${path}`;
+      const localWs = new WebSocket(wsUrl, protocol ? [protocol] : undefined);
+
+      localWs.addEventListener("open", () => {
+        // Confirm to server that WS is open
+        const response: ClientMessage = {
+          type: "ws_opened",
+          wsId,
+          protocol: localWs.protocol || undefined,
+        };
+        this.ws?.send(JSON.stringify(response));
+        this.localWebSockets.set(wsId, localWs);
+      });
+
+      localWs.addEventListener("message", (event) => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+        if (typeof event.data === "string") {
+          const msg: ClientMessage = {
+            type: "ws_message",
+            wsId,
+            data: event.data,
+          };
+          this.ws.send(JSON.stringify(msg));
+        } else if (event.data instanceof ArrayBuffer) {
+          // Binary message
+          const header: ClientMessage = {
+            type: "ws_message_binary",
+            wsId,
+          };
+          this.ws.send(JSON.stringify(header));
+          this.ws.send(new Uint8Array(event.data));
+        } else if (event.data instanceof Blob) {
+          // Convert Blob to ArrayBuffer
+          event.data.arrayBuffer().then((buffer) => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+            const header: ClientMessage = {
+              type: "ws_message_binary",
+              wsId,
+            };
+            this.ws.send(JSON.stringify(header));
+            this.ws.send(new Uint8Array(buffer));
+          });
+        }
+      });
+
+      localWs.addEventListener("close", (event) => {
+        this.localWebSockets.delete(wsId);
+        const msg: ClientMessage = {
+          type: "ws_close",
+          wsId,
+          code: event.code,
+          reason: event.reason,
+        };
+        this.ws?.send(JSON.stringify(msg));
+      });
+
+      localWs.addEventListener("error", () => {
+        this.localWebSockets.delete(wsId);
+        const msg: ClientMessage = {
+          type: "ws_error",
+          wsId,
+          error: "WebSocket connection failed",
+        };
+        this.ws?.send(JSON.stringify(msg));
+      });
+    } catch (error) {
+      const msg: ClientMessage = {
+        type: "ws_error",
+        wsId,
+        error: error instanceof Error ? error.message : "Failed to open WebSocket",
+      };
+      this.ws?.send(JSON.stringify(msg));
+    }
+  }
+
+  // WebSocket passthrough: forward message to local WS
+  private handleWsMessage(message: Extract<ServerMessage, { type: "ws_message" }>): void {
+    const localWs = this.localWebSockets.get(message.wsId);
+    if (localWs && localWs.readyState === WebSocket.OPEN) {
+      localWs.send(message.data);
+    }
+  }
+
+  // Handle binary frame from tunnel (WS passthrough)
+  private handleBinaryFrame(data: Uint8Array): void {
+    if (this.pendingWsBinaryWsId) {
+      const wsId = this.pendingWsBinaryWsId;
+      this.pendingWsBinaryWsId = null;
+
+      const localWs = this.localWebSockets.get(wsId);
+      if (localWs && localWs.readyState === WebSocket.OPEN) {
+        localWs.send(data);
+      }
+    }
+  }
+
+  // WebSocket passthrough: close local WS
+  private handleWsClose(message: Extract<ServerMessage, { type: "ws_close" }>): void {
+    const localWs = this.localWebSockets.get(message.wsId);
+    if (localWs) {
+      this.localWebSockets.delete(message.wsId);
+      try {
+        localWs.close(message.code ?? 1000, message.reason);
+      } catch {
+        // Already closed
+      }
+    }
+  }
+
+  // Close all local WebSockets (on disconnect)
+  private closeAllLocalWebSockets(): void {
+    for (const [wsId, localWs] of this.localWebSockets) {
+      try {
+        localWs.close(1001, "Tunnel disconnected");
+      } catch {
+        // Ignore
+      }
+      this.localWebSockets.delete(wsId);
+    }
   }
 
   private detectConnectionType(headers: Record<string, string>, path: string): 'ws' | 'sse' | 'http' {

@@ -18,7 +18,34 @@ export type ServerMessage =
       duration: number; // Real end-to-end time measured on server
     }
   | { type: "ping" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  // WebSocket passthrough: server tells client to open WS to localhost
+  | {
+      type: "ws_open";
+      wsId: string;
+      path: string;
+      headers: Record<string, string>;
+      protocol?: string; // Sec-WebSocket-Protocol
+    }
+  // WebSocket passthrough: server forwards message from browser to client
+  | {
+      type: "ws_message";
+      wsId: string;
+      data: string; // For text frames
+      isBinary?: false;
+    }
+  | {
+      type: "ws_message_binary";
+      wsId: string;
+      // Binary data follows as next WebSocket frame
+    }
+  // WebSocket passthrough: server tells client that browser closed WS
+  | {
+      type: "ws_close";
+      wsId: string;
+      code?: number;
+      reason?: string;
+    };
 
 // Client -> Server messages
 export type ClientMessage =
@@ -63,7 +90,38 @@ export type ClientMessage =
       requestId: string;
       error: string;
     }
-  | { type: "pong" };
+  | { type: "pong" }
+  // WebSocket passthrough: client confirms WS opened to localhost
+  | {
+      type: "ws_opened";
+      wsId: string;
+      protocol?: string; // Selected Sec-WebSocket-Protocol
+    }
+  // WebSocket passthrough: client reports WS open failed
+  | {
+      type: "ws_error";
+      wsId: string;
+      error: string;
+    }
+  // WebSocket passthrough: client forwards message from localhost to browser
+  | {
+      type: "ws_message";
+      wsId: string;
+      data: string; // For text frames
+      isBinary?: false;
+    }
+  | {
+      type: "ws_message_binary";
+      wsId: string;
+      // Binary data follows as next WebSocket frame
+    }
+  // WebSocket passthrough: client tells server that localhost WS closed
+  | {
+      type: "ws_close";
+      wsId: string;
+      code?: number;
+      reason?: string;
+    };
 
 // Type guards
 export function isServerMessage(msg: unknown): msg is ServerMessage {

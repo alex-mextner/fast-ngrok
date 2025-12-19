@@ -9,6 +9,20 @@ interface PendingRequest {
   timeout: Timer;
 }
 
+// WebSocket passthrough: pending upgrade waiting for client to connect to localhost
+interface PendingWsUpgrade {
+  wsId: string;
+  resolve: (protocol?: string) => void;
+  reject: (error: string) => void;
+  timeout: Timer;
+}
+
+// WebSocket passthrough: active browser WS connection
+interface ActiveBrowserWs {
+  wsId: string;
+  ws: ServerWebSocket<BrowserWsData>;
+}
+
 // Binary response waiting for body frame
 interface PendingBinaryHeader {
   requestId: string;
@@ -30,10 +44,14 @@ interface TunnelResponse {
   body: Uint8Array | string | ReadableStream<Uint8Array>;
 }
 
-export interface TunnelData {
-  subdomain: string;
-  apiKey: string;
-}
+// Discriminated union for WebSocket data
+export type WsData =
+  | { type: "tunnel"; subdomain: string; apiKey: string }
+  | { type: "browser"; wsId: string; subdomain: string };
+
+// Legacy export for compatibility
+export type TunnelData = Extract<WsData, { type: "tunnel" }>;
+export type BrowserWsData = Extract<WsData, { type: "browser" }>;
 
 interface ActiveTunnel {
   ws: ServerWebSocket<TunnelData>;
@@ -47,6 +65,12 @@ interface ActiveTunnel {
   activeStreams: Map<string, ActiveStream>;
   // Ping interval timer
   pingInterval: Timer | null;
+  // WebSocket passthrough: pending upgrades waiting for client confirmation
+  pendingWsUpgrades: Map<string, PendingWsUpgrade>;
+  // WebSocket passthrough: active browser WS connections
+  browserWebSockets: Map<string, ActiveBrowserWs>;
+  // WebSocket passthrough: pending binary message (wsId for next binary frame)
+  pendingWsBinaryWsId: string | null;
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
@@ -73,6 +97,9 @@ class TunnelManager {
       pendingBinaryHeader: null,
       activeStreams: new Map(),
       pingInterval,
+      pendingWsUpgrades: new Map(),
+      browserWebSockets: new Map(),
+      pendingWsBinaryWsId: null,
     });
     console.log(`[tunnel] Registered: ${subdomain}`);
   }
@@ -95,6 +122,19 @@ class TunnelManager {
           stream.controller.error(new Error("Tunnel disconnected"));
         } catch {
           // Stream may already be closed
+        }
+      }
+      // Reject all pending WS upgrades
+      for (const pending of tunnel.pendingWsUpgrades.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject("Tunnel disconnected");
+      }
+      // Close all browser WebSockets
+      for (const browserWs of tunnel.browserWebSockets.values()) {
+        try {
+          browserWs.ws.close(1001, "Tunnel disconnected");
+        } catch {
+          // WS may already be closed
         }
       }
       this.tunnels.delete(subdomain);
@@ -338,6 +378,186 @@ class TunnelManager {
         }
         return;
       }
+    }
+
+    // Check for pending WebSocket binary message
+    if (tunnel.pendingWsBinaryWsId) {
+      const wsId = tunnel.pendingWsBinaryWsId;
+      tunnel.pendingWsBinaryWsId = null;
+
+      const browserWs = tunnel.browserWebSockets.get(wsId);
+      if (browserWs && browserWs.ws.readyState === 1) {
+        browserWs.ws.send(data);
+      }
+      return;
+    }
+  }
+
+  // WebSocket passthrough: check if request is WS upgrade
+  isWebSocketUpgrade(req: Request): boolean {
+    const upgrade = req.headers.get("upgrade")?.toLowerCase();
+    const connection = req.headers.get("connection")?.toLowerCase();
+    return upgrade === "websocket" && (connection?.includes("upgrade") ?? false);
+  }
+
+  // WebSocket passthrough: initiate upgrade through tunnel
+  // Returns wsId to use for browser WS registration
+  async initiateWsUpgrade(
+    subdomain: string,
+    path: string,
+    headers: Record<string, string>,
+    protocol?: string
+  ): Promise<string> {
+    const tunnel = this.tunnels.get(subdomain);
+    if (!tunnel) {
+      throw new Error("Tunnel not found");
+    }
+
+    const wsId = crypto.randomUUID();
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        tunnel.pendingWsUpgrades.delete(wsId);
+        reject(new Error("WebSocket upgrade timeout"));
+      }, REQUEST_TIMEOUT);
+
+      tunnel.pendingWsUpgrades.set(wsId, {
+        wsId,
+        resolve: () => {
+          clearTimeout(timeout);
+          tunnel.pendingWsUpgrades.delete(wsId);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          tunnel.pendingWsUpgrades.delete(wsId);
+          reject(new Error(error));
+        },
+        timeout,
+      });
+
+      // Send ws_open to client
+      const message: ServerMessage = {
+        type: "ws_open",
+        wsId,
+        path,
+        headers,
+        protocol,
+      };
+
+      if (tunnel.ws.readyState === 1) {
+        tunnel.ws.send(JSON.stringify(message));
+      } else {
+        clearTimeout(timeout);
+        tunnel.pendingWsUpgrades.delete(wsId);
+        reject(new Error("Tunnel disconnected"));
+      }
+    });
+
+    return wsId;
+  }
+
+  // WebSocket passthrough: register browser WS after successful upgrade
+  registerBrowserWs(subdomain: string, wsId: string, ws: ServerWebSocket<BrowserWsData>): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (tunnel) {
+      tunnel.browserWebSockets.set(wsId, { wsId, ws });
+      console.log(`[ws] Browser WS registered: ${wsId} (subdomain: ${subdomain})`);
+    }
+  }
+
+  // WebSocket passthrough: unregister browser WS
+  unregisterBrowserWs(subdomain: string, wsId: string): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (tunnel) {
+      tunnel.browserWebSockets.delete(wsId);
+      console.log(`[ws] Browser WS unregistered: ${wsId}`);
+    }
+  }
+
+  // WebSocket passthrough: forward message from browser to client
+  forwardBrowserWsMessage(subdomain: string, wsId: string, data: string | ArrayBuffer): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (!tunnel || tunnel.ws.readyState !== 1) return;
+
+    if (typeof data === "string") {
+      const message: ServerMessage = {
+        type: "ws_message",
+        wsId,
+        data,
+      };
+      tunnel.ws.send(JSON.stringify(message));
+    } else {
+      // Binary: send header then binary frame
+      const message: ServerMessage = {
+        type: "ws_message_binary",
+        wsId,
+      };
+      tunnel.ws.send(JSON.stringify(message));
+      tunnel.ws.send(new Uint8Array(data));
+    }
+  }
+
+  // WebSocket passthrough: notify client that browser closed WS
+  notifyBrowserWsClosed(subdomain: string, wsId: string, code?: number, reason?: string): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (!tunnel || tunnel.ws.readyState !== 1) return;
+
+    const message: ServerMessage = {
+      type: "ws_close",
+      wsId,
+      code,
+      reason,
+    };
+    tunnel.ws.send(JSON.stringify(message));
+  }
+
+  // WebSocket passthrough: handle client WS-related messages
+  handleWsResponse(subdomain: string, message: ClientMessage): void {
+    const tunnel = this.tunnels.get(subdomain);
+    if (!tunnel) return;
+
+    if (message.type === "ws_opened") {
+      const pending = tunnel.pendingWsUpgrades.get(message.wsId);
+      if (pending) {
+        pending.resolve(message.protocol);
+      }
+      return;
+    }
+
+    if (message.type === "ws_error") {
+      const pending = tunnel.pendingWsUpgrades.get(message.wsId);
+      if (pending) {
+        pending.reject(message.error);
+      }
+      return;
+    }
+
+    if (message.type === "ws_message") {
+      const browserWs = tunnel.browserWebSockets.get(message.wsId);
+      if (browserWs && browserWs.ws.readyState === 1) {
+        browserWs.ws.send(message.data);
+      }
+      return;
+    }
+
+    if (message.type === "ws_message_binary") {
+      // Next binary frame is for this wsId
+      tunnel.pendingWsBinaryWsId = message.wsId;
+      return;
+    }
+
+    if (message.type === "ws_close") {
+      const browserWs = tunnel.browserWebSockets.get(message.wsId);
+      if (browserWs) {
+        try {
+          browserWs.ws.close(message.code ?? 1000, message.reason);
+        } catch {
+          // Already closed
+        }
+        tunnel.browserWebSockets.delete(message.wsId);
+      }
+      return;
     }
   }
 
