@@ -15,6 +15,10 @@ export class LocalProxy {
     const forwardHeaders = { ...headers };
     delete forwardHeaders["host"];
     delete forwardHeaders["x-tunnel-subdomain"];
+    // Remove content-length for requests without body - fetch will set it correctly
+    if (!body) {
+      delete forwardHeaders["content-length"];
+    }
     // Keep accept-encoding - let local app decide on compression
     // This preserves ETag behavior (Vary: Accept-Encoding)
 
