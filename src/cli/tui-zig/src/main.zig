@@ -159,7 +159,7 @@ const App = struct {
         if (height > 3) {
             const footer_row = height - 3;
             self.drawSeparator(win, footer_row, width);
-            self.drawStats(win, footer_row + 1);
+            self.drawStats(win, footer_row + 1, width);
         }
     }
 
@@ -321,7 +321,7 @@ const App = struct {
         }
     }
 
-    fn drawStats(self: *App, win: vaxis.Window, row: u16) void {
+    fn drawStats(self: *App, win: vaxis.Window, row: u16, width: u16) void {
         var col: u16 = 0;
 
         // Total requests
@@ -351,6 +351,12 @@ const App = struct {
         // 5xx (red)
         const s5xx = std.fmt.bufPrint(&self.stats_5xx_buf, "5xx: {d}", .{self.state.stats_5xx}) catch "?";
         _ = win.printSegment(.{ .text = s5xx, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = col });
+        col += @intCast(s5xx.len);
+
+        // Clear rest of line to prevent old content from showing through
+        while (col < width) : (col += 1) {
+            _ = win.printSegment(.{ .text = " " }, .{ .row_offset = row, .col_offset = col });
+        }
     }
 };
 
