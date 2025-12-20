@@ -19,12 +19,19 @@ export class LocalProxy {
     // This preserves ETag behavior (Vary: Accept-Encoding)
 
     try {
-      return await fetch(localUrl, {
+      console.log(`[DEBUG] ${method} ${localUrl}`);
+      console.log(`[DEBUG] headers:`, JSON.stringify(forwardHeaders, null, 2));
+      console.log(`[DEBUG] body:`, body ? `"${body.slice(0, 200)}"` : "undefined");
+
+      const response = await fetch(localUrl, {
         method,
         headers: forwardHeaders,
         body: method !== "GET" && method !== "HEAD" && body ? body : undefined,
         redirect: "manual", // Don't follow redirects, proxy them as-is
       });
+
+      console.log(`[DEBUG] response: ${response.status} ${response.statusText}`);
+      return response;
     } catch (error) {
       // Local server not available
       throw new Error(`Local server not responding at localhost:${this.port}`);
