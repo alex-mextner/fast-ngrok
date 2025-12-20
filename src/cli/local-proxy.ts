@@ -1,11 +1,4 @@
 // Forward requests to local server
-import { appendFileSync } from "fs";
-
-const DEBUG_LOG = "/tmp/fast-ngrok-debug.log";
-function debug(...args: unknown[]) {
-  const line = `[${new Date().toISOString()}] ${args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}\n`;
-  appendFileSync(DEBUG_LOG, line);
-}
 
 export class LocalProxy {
   constructor(private port: number) {}
@@ -31,20 +24,13 @@ export class LocalProxy {
     // This preserves ETag behavior (Vary: Accept-Encoding)
 
     try {
-      debug(`${method} ${localUrl}`);
-      debug("headers:", forwardHeaders);
-      debug("body:", body ? body.slice(0, 200) : "undefined");
-
-      const response = await fetch(localUrl, {
+      return await fetch(localUrl, {
         method,
         headers: forwardHeaders,
         body: method !== "GET" && method !== "HEAD" && body ? body : undefined,
         redirect: "manual", // Don't follow redirects, proxy them as-is
       });
-
-      debug(`response: ${response.status} ${response.statusText}`);
-      return response;
-    } catch (error) {
+    } catch {
       // Local server not available
       throw new Error(`Local server not responding at localhost:${this.port}`);
     }
