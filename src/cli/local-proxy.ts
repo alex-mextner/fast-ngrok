@@ -22,7 +22,7 @@ export class LocalProxy {
       return await fetch(localUrl, {
         method,
         headers: forwardHeaders,
-        body: method !== "GET" && method !== "HEAD" ? body : undefined,
+        body: method !== "GET" && method !== "HEAD" && body ? body : undefined,
         redirect: "manual", // Don't follow redirects, proxy them as-is
       });
     } catch (error) {
