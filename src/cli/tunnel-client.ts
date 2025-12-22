@@ -129,9 +129,13 @@ export class TunnelClient {
   private async handleMessage(data: string): Promise<void> {
     // Quick sanity check - valid JSON messages start with {
     if (!data || data[0] !== "{") {
-      // Binary data leaked through as string, or empty message - skip
+      // Binary data leaked through as string - convert back and handle
       if (data.length > 0) {
-        this.logWarn(`Skipping non-JSON message (len=${data.length}, first byte=0x${data.charCodeAt(0).toString(16)})`);
+        const bytes = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) {
+          bytes[i] = data.charCodeAt(i) & 0xff;
+        }
+        this.handleBinaryFrame(bytes);
       }
       return;
     }
