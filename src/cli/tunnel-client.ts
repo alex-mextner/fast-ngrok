@@ -172,7 +172,9 @@ export class TunnelClient {
           break;
       }
     } catch (error) {
-      this.logError("Failed to parse message", error);
+      // Log first 200 chars of data to help debug
+      const preview = data.length > 200 ? data.slice(0, 200) + "..." : data;
+      this.logError(`Failed to parse message (len=${data.length}): ${preview}`, error);
     }
   }
 
