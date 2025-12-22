@@ -42,6 +42,7 @@ pub const MAX_URL_LEN = 256;
 pub const MAX_PATH_LEN = 512;
 pub const MAX_METHOD_LEN = 16;
 pub const MAX_ERROR_LEN = 256;
+pub const MAX_LOG_PATH_LEN = 128;
 
 pub const Request = extern struct {
     id: u64,
@@ -83,6 +84,12 @@ pub const State = extern struct {
     stats_4xx: u32,
     stats_5xx: u32,
     stats_avg_ms: u32,
+
+    // Error log file indicator
+    log_file_path: [MAX_LOG_PATH_LEN]u8,
+    log_file_path_len: u16,
+    log_has_errors: bool,
+    _pad3: u8,
 
     version: std.atomic.Value(u32),
 };
@@ -353,6 +360,18 @@ const App = struct {
         _ = win.printSegment(.{ .text = s5xx, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = col });
         col += @intCast(s5xx.len);
 
+        // Log file with errors indicator (right-aligned)
+        if (self.state.log_has_errors and self.state.log_file_path_len > 0) {
+            const log_path_len = @min(self.state.log_file_path_len, MAX_LOG_PATH_LEN);
+            const log_path = self.state.log_file_path[0..log_path_len];
+            const log_text_len: u16 = @intCast(log_path_len + 9); // "Errors: " + path
+            if (width > col + log_text_len + 2) {
+                const log_col = width - log_text_len - 1;
+                _ = win.printSegment(.{ .text = "Errors: ", .style = .{ .fg = C_RED, .bold = true } }, .{ .row_offset = row, .col_offset = log_col });
+                _ = win.printSegment(.{ .text = log_path, .style = .{ .fg = C_RED } }, .{ .row_offset = row, .col_offset = log_col + 8 });
+            }
+        }
+
         // Clear rest of line to prevent old content from showing through
         while (col < width) : (col += 1) {
             _ = win.printSegment(.{ .text = " " }, .{ .row_offset = row, .col_offset = col });
@@ -571,6 +590,15 @@ pub export fn state_offset_stats_5xx() usize {
 }
 pub export fn state_offset_stats_avg_ms() usize {
     return @offsetOf(State, "stats_avg_ms");
+}
+pub export fn state_offset_log_file_path() usize {
+    return @offsetOf(State, "log_file_path");
+}
+pub export fn state_offset_log_file_path_len() usize {
+    return @offsetOf(State, "log_file_path_len");
+}
+pub export fn state_offset_log_has_errors() usize {
+    return @offsetOf(State, "log_has_errors");
 }
 pub export fn state_offset_version() usize {
     return @offsetOf(State, "version");

@@ -1,5 +1,6 @@
 import { connect, type Socket } from "node:net";
 import { getConfig, saveConfig } from "../config.ts";
+import { initLogger } from "../logger.ts";
 import { TunnelClient } from "../tunnel-client.ts";
 import { ZigTUI } from "../tui-zig/ffi.ts";
 import {
@@ -112,11 +113,19 @@ export async function httpCommand(
 
   const tui = new ZigTUI(port);
 
+  // Initialize error logger
+  const logger = initLogger();
+  tui.setLogFile(logger.getLogPath(), false);
+
   const client = new TunnelClient({
     serverUrl: config.serverUrl,
     apiKey: config.apiKey,
     localPort: port,
     subdomain,
+    logger,
+    onLogError: () => {
+      tui.setLogFile(logger.getLogPath(), true);
+    },
 
     onRequest: (req) => {
       tui.addRequest(req);

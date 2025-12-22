@@ -52,6 +52,7 @@ const MAX_URL_LEN = 256;
 const MAX_PATH_LEN = 512;
 const MAX_METHOD_LEN = 16;
 const MAX_ERROR_LEN = 256;
+const MAX_LOG_PATH_LEN = 128;
 
 // Connection types
 const CONN_HTTP = 0;
@@ -110,6 +111,9 @@ const lib = dlopen(getLibPath(), {
   state_offset_stats_4xx: { args: [], returns: FFIType.u64 },
   state_offset_stats_5xx: { args: [], returns: FFIType.u64 },
   state_offset_stats_avg_ms: { args: [], returns: FFIType.u64 },
+  state_offset_log_file_path: { args: [], returns: FFIType.u64 },
+  state_offset_log_file_path_len: { args: [], returns: FFIType.u64 },
+  state_offset_log_has_errors: { args: [], returns: FFIType.u64 },
   state_offset_version: { args: [], returns: FFIType.u64 },
 });
 
@@ -151,6 +155,9 @@ const STATE = {
   stats_4xx: Number(lib.symbols.state_offset_stats_4xx()),
   stats_5xx: Number(lib.symbols.state_offset_stats_5xx()),
   stats_avg_ms: Number(lib.symbols.state_offset_stats_avg_ms()),
+  log_file_path: Number(lib.symbols.state_offset_log_file_path()),
+  log_file_path_len: Number(lib.symbols.state_offset_log_file_path_len()),
+  log_has_errors: Number(lib.symbols.state_offset_log_has_errors()),
   version: Number(lib.symbols.state_offset_version()),
 };
 
@@ -250,6 +257,15 @@ export class ZigTUI {
     const msgLen = Math.min(msgBytes.length, MAX_ERROR_LEN);
     this.stateU8.set(msgBytes.subarray(0, msgLen), STATE.error_message);
     this.stateView.setUint16(STATE.error_len, msgLen, true);
+    this.incrementVersion();
+  }
+
+  setLogFile(path: string, hasErrors: boolean): void {
+    const pathBytes = new TextEncoder().encode(path);
+    const pathLen = Math.min(pathBytes.length, MAX_LOG_PATH_LEN);
+    this.stateU8.set(pathBytes.subarray(0, pathLen), STATE.log_file_path);
+    this.stateView.setUint16(STATE.log_file_path_len, pathLen, true);
+    this.stateU8[STATE.log_has_errors] = hasErrors ? 1 : 0;
     this.incrementVersion();
   }
 

@@ -1,12 +1,15 @@
 import type { ServerMessage, ClientMessage } from "../shared/protocol.ts";
 import type { RequestInfo } from "../shared/types.ts";
 import { LocalProxy } from "./local-proxy.ts";
+import type { Logger } from "./logger.ts";
 
 export interface TunnelClientOptions {
   serverUrl: string;
   apiKey: string;
   localPort: number;
   subdomain?: string; // Custom subdomain (optional)
+  logger?: Logger; // Error logger (writes to file instead of console)
+  onLogError?: () => void; // Called after logging an error (to update TUI)
   onRequest?: (req: RequestInfo) => void;
   // duration = time spent on CLI side (local fetch + compress + send)
   onResponse?: (id: string, status: number, duration: number, error?: boolean) => void;
@@ -40,6 +43,15 @@ export class TunnelClient {
     if (options.subdomain) {
       this.currentSubdomain = options.subdomain;
     }
+  }
+
+  private logError(message: string, error?: unknown): void {
+    this.options.logger?.error(message, error);
+    this.options.onLogError?.();
+  }
+
+  private logWarn(message: string): void {
+    this.options.logger?.warn(message);
   }
 
   async connect(): Promise<void> {
@@ -84,12 +96,12 @@ export class TunnelClient {
           }
           await this.handleMessage(event.data.toString());
         } catch (error) {
-          console.error("[ws] Message handling error:", error);
+          this.logError("[ws] Message handling error", error);
         }
       });
 
       this.ws.addEventListener("close", (event) => {
-        console.error(`[ws] Connection closed: code=${event.code}, reason=${event.reason}`);
+        this.logWarn(`[ws] Connection closed: code=${event.code}, reason=${event.reason}`);
         this.stopPingInterval();
         this.closeAllLocalWebSockets();
         this.options.onDisconnect?.();
@@ -160,7 +172,7 @@ export class TunnelClient {
           break;
       }
     } catch (error) {
-      console.error("Failed to parse message:", error);
+      this.logError("Failed to parse message", error);
     }
   }
 
@@ -648,7 +660,7 @@ export class TunnelClient {
         return { data: new Uint8Array(compressed) as Uint8Array<ArrayBuffer>, encoding: "gzip" };
       }
     } catch (e) {
-      console.error("[compress] Failed:", e);
+      this.logError("[compress] Failed", e);
     }
 
     return null;
