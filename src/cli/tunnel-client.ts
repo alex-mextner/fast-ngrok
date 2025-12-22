@@ -75,6 +75,9 @@ export class TunnelClient {
         },
       } as unknown as string | string[]);
 
+      // Ensure binary data comes as ArrayBuffer, not Blob or string
+      this.ws.binaryType = "arraybuffer";
+
       this.ws.addEventListener("open", () => {
         this.hasConnectedOnce = true; // Enable reconnect after first successful connection
         this.reconnectAttempts = 0;
@@ -127,16 +130,13 @@ export class TunnelClient {
   }
 
   private async handleMessage(data: string): Promise<void> {
-    // Quick sanity check - valid JSON messages start with {
-    if (!data || data[0] !== "{") {
-      // Binary data leaked through as string - convert back and handle
-      if (data.length > 0) {
-        const bytes = new Uint8Array(data.length);
-        for (let i = 0; i < data.length; i++) {
-          bytes[i] = data.charCodeAt(i) & 0xff;
-        }
-        this.handleBinaryFrame(bytes);
-      }
+    // Sanity check - valid JSON messages start with {
+    if (!data) return;
+
+    if (data[0] !== "{") {
+      // Not JSON - log for debugging (shouldn't happen with binaryType=arraybuffer)
+      const firstBytes = data.slice(0, 20).split("").map(c => c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
+      this.logWarn(`Unexpected non-JSON message (len=${data.length}): ${firstBytes}...`);
       return;
     }
 
